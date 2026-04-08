@@ -43,6 +43,14 @@ module gamefi::mines {
     /// 莊家優勢上限：1000 bps = 10%
     const MAX_HOUSE_EDGE_BPS: u64 = 1000;
 
+    /// 單局最大賠付預設值：50 SUI
+    /// 玩家單局能贏取的上限，防止大額幸運連勝清空金庫
+    const DEFAULT_MAX_SINGLE_PAYOUT: u64 = 50_000_000_000;
+
+    /// 超時 epoch 數：超過此值的進行中遊戲可被強制結算
+    /// Sui 每個 epoch ≈ 24 小時，7 epochs ≈ 7 天
+    const SESSION_EXPIRE_EPOCHS: u64 = 7;
+
     // 遊戲狀態碼
     const STATUS_ACTIVE: u8 = 0;
     const STATUS_EXPLODED: u8 = 1;
@@ -60,6 +68,9 @@ module gamefi::mines {
     const EHouseEdgeTooHigh: u64 = 10;
     const EGameStillActive: u64 = 11;
     const EInvalidBetLimits: u64 = 12;
+    const ESessionNotExpired: u64 = 13;
+    const EBetExceedsSinglePayoutCap: u64 = 14;
+    const EInvalidPayoutCap: u64 = 15;
 
     // === 結構體 ===
 
@@ -69,7 +80,7 @@ module gamefi::mines {
         id: UID,
         /// 平台金庫，用於支付玩家獲勝賠付
         treasury: Balance<SUI>,
-        /// 當前所有進行中遊戲的最大潛在淨賠付總和（已預留）
+        /// 當前所有進行中遊戲的已預留淨賠付總和
         reserved: u64,
         /// 莊家優勢（basis points，例如 300 = 3%）
         house_edge_bps: u64,
@@ -77,6 +88,9 @@ module gamefi::mines {
         min_bet: u64,
         /// 最高押注（MIST 單位）
         max_bet: u64,
+        /// 單局最大賠付上限（含押注本金）
+        /// 防止單一幸運玩家連勝清空金庫
+        max_single_payout: u64,
         /// 管理員地址
         admin: address,
         /// 是否暫停
@@ -118,6 +132,12 @@ module gamefi::mines {
         current_multiplier: u64,
         /// 遊戲狀態：STATUS_ACTIVE 或 STATUS_EXPLODED
         status: u8,
+        /// 開局時的 epoch（用於超時判斷）
+        start_epoch: u64,
+        /// 開局時從金庫預留的淨賠付金額
+        /// 存儲此值確保 cashout/expire 釋放的金額與預留時完全一致，
+        /// 不受後續 max_single_payout 參數變更影響
+        reserved_amount: u64,
     }
 
     // === 事件 ===
@@ -153,6 +173,15 @@ module gamefi::mines {
         bet_lost: u64,
     }
 
+    public struct GameExpired has copy, drop {
+        game_id: ID,
+        player: address,
+        /// 被沒收進金庫的押注金額
+        bet_confiscated: u64,
+        /// 釋放的預留資金
+        reserved_released: u64,
+    }
+
     // === 初始化 ===
 
     fun init(ctx: &mut TxContext) {
@@ -161,9 +190,10 @@ module gamefi::mines {
             id: object::new(ctx),
             treasury: balance::zero(),
             reserved: 0,
-            house_edge_bps: 300,          // 預設 3% 莊家優勢
-            min_bet: 1_000_000,           // 最低 0.001 SUI
-            max_bet: 10_000_000_000,      // 最高 10 SUI
+            house_edge_bps: 300,                       // 預設 3% 莊家優勢
+            min_bet: 1_000_000,                        // 最低 0.001 SUI
+            max_bet: 10_000_000_000,                   // 最高 10 SUI
+            max_single_payout: DEFAULT_MAX_SINGLE_PAYOUT, // 最高單局賠付 50 SUI
             admin: ctx.sender(),
             paused: false,
         };
@@ -229,18 +259,28 @@ module gamefi::mines {
         assert!(!platform.paused, EPlatformPaused);
         assert!(bet_amount >= platform.min_bet, EBetTooSmall);
         assert!(bet_amount <= platform.max_bet, EBetTooLarge);
+        // 押注不可超過單局賠付上限（否則即使贏了也只能賠上限，開局無意義）
+        assert!(bet_amount <= platform.max_single_payout, EBetExceedsSinglePayoutCap);
         assert!(balance::value(&player_balance.balance) >= bet_amount, EInsufficientBalance);
 
-        // 計算本局理論最大淨賠付（超出押注的部分）
-        // 最大倍數 = 4368x，最大淨賠 = bet * 4367
-        // 使用 u128 避免溢出
-        let max_net_payout = (bet_amount as u128) * ((MAX_MULTIPLIER - 1) as u128);
+        // 計算本局實際需預留的淨賠付（取較小值）：
+        //   theoretical = bet * (MAX_MULTIPLIER - 1) = bet * 4367
+        //   capped       = max_single_payout - bet    ← 單局賠付封頂後的最大淨賠
+        // 取兩者最小，避免為不可能發生的超額賠付鎖住金庫資金
+        let theoretical_net = (bet_amount as u128) * ((MAX_MULTIPLIER - 1) as u128);
+        let capped_net = (platform.max_single_payout as u128) - (bet_amount as u128);
+        let reserved_amount = if (theoretical_net < capped_net) {
+            theoretical_net as u64
+        } else {
+            capped_net as u64
+        };
+
         let treasury_available =
             (balance::value(&platform.treasury) as u128) - (platform.reserved as u128);
-        assert!(treasury_available >= max_net_payout, EInsufficientTreasury);
+        assert!((treasury_available as u128) >= (reserved_amount as u128), EInsufficientTreasury);
 
-        // 預留本局最大賠付至 reserved
-        platform.reserved = platform.reserved + (max_net_payout as u64);
+        // 預留本局實際最大淨賠付至 reserved
+        platform.reserved = platform.reserved + reserved_amount;
 
         // 從玩家帳戶扣除押注，存入遊戲會話
         let bet_balance = balance::split(&mut player_balance.balance, bet_amount);
@@ -257,6 +297,8 @@ module gamefi::mines {
             revealed_mask: 0,
             current_multiplier: MULTIPLIER_SCALE, // 初始 1.0x
             status: STATUS_ACTIVE,
+            start_epoch: ctx.epoch(),
+            reserved_amount,
         };
 
         event::emit(GameStarted {
@@ -281,11 +323,10 @@ module gamefi::mines {
     /// 安全格：按倍數公式更新倍數（含莊家優勢折扣）
     /// 炸彈格：押注歸零，全數轉入金庫，遊戲結束
     ///
-    /// 注意：此函數為 public 以支援 PTB 組合調用。
-    /// Sui 的 Random 物件由驗證者共識更新，用戶在交易提交前無法預知隨機結果。
-    /// 交易一旦上鏈即不可撤銷，因此不存在「選擇性提交」的攻擊面。
-    #[allow(lint(public_random))]
-    public fun reveal_tile(
+    /// 安全性：此函數定義為 entry，確保只能由 PTB 直接呼叫，
+    /// 無法被其他 Move 合約組合（防止「翻牌後反悔」攻擊：
+    /// 惡意合約在收到炸彈結果後 abort 整筆交易以重試）。
+    entry fun reveal_tile(
         platform: &mut GamePlatform,
         game: &mut GameSession,
         tile_index: u64,
@@ -321,9 +362,8 @@ module gamefi::mines {
             let lost = balance::split(&mut game.bet_balance, bet_amount);
             balance::join(&mut platform.treasury, lost);
 
-            // 釋放預留資金
-            let max_net = (game.bet_amount as u128) * ((MAX_MULTIPLIER - 1) as u128);
-            platform.reserved = platform.reserved - (max_net as u64);
+            // 釋放預留資金（使用開局時存儲的精確值，不重新計算）
+            platform.reserved = platform.reserved - game.reserved_amount;
 
             event::emit(TileRevealed {
                 game_id: object::id(game),
@@ -399,12 +439,22 @@ module gamefi::mines {
             revealed_mask: _,
             current_multiplier,
             status: _,
+            start_epoch: _,
+            reserved_amount,
         } = game;
 
         // 計算應付金額：bet * multiplier / SCALE
-        let payout = ((bet_amount as u128)
+        let raw_payout = ((bet_amount as u128)
             * (current_multiplier as u128)
             / (MULTIPLIER_SCALE as u128)) as u64;
+
+        // 封頂：單局賠付不超過 max_single_payout
+        // 即使玩家達到極高倍數，金庫最多支付此上限
+        let payout = if (raw_payout > platform.max_single_payout) {
+            platform.max_single_payout
+        } else {
+            raw_payout
+        };
 
         if (payout >= bet_amount) {
             // 正常情況：退回押注 + 從金庫支付利潤
@@ -425,9 +475,8 @@ module gamefi::mines {
             balance::destroy_zero(bet_bal);
         };
 
-        // 釋放預留資金
-        let max_net = (bet_amount as u128) * ((MAX_MULTIPLIER - 1) as u128);
-        platform.reserved = platform.reserved - (max_net as u64);
+        // 釋放預留資金（使用開局時存儲的精確值）
+        platform.reserved = platform.reserved - reserved_amount;
 
         let game_id = object::uid_to_inner(&id);
         event::emit(GameCashedOut {
@@ -455,9 +504,68 @@ module gamefi::mines {
             revealed_mask: _,
             current_multiplier: _,
             status: _,
+            start_epoch: _,
+            reserved_amount: _,
         } = game;
-        // 炸彈觸發後押注已全部轉出，bet_balance 應為零
+        // 炸彈觸發後押注已全部轉出，reserved 也已在 reveal_tile 時釋放
+        // bet_balance 此時必為零
         balance::destroy_zero(bet_balance);
+        object::delete(id);
+    }
+
+    /// 強制結算超時遊戲會話
+    ///
+    /// 任何人均可呼叫（無需 AdminCap）
+    /// 條件：遊戲為 STATUS_ACTIVE 且已超過 SESSION_EXPIRE_EPOCHS 個 epoch
+    ///
+    /// 效果：
+    ///   - 玩家押注沒收，轉入金庫
+    ///   - 預留資金釋放
+    ///   - GameSession 對象刪除
+    ///
+    /// 設計意圖：防止玩家透過棄置大量遊戲會話來鎖死金庫資金
+    public fun force_expire_game(
+        platform: &mut GamePlatform,
+        game: GameSession,
+        ctx: &TxContext,
+    ) {
+        assert!(game.status == STATUS_ACTIVE, EGameNotActive);
+        assert!(
+            ctx.epoch() >= game.start_epoch + SESSION_EXPIRE_EPOCHS,
+            ESessionNotExpired
+        );
+
+        let GameSession {
+            id,
+            player,
+            bet_amount: _,
+            bet_balance,
+            tiles_remaining: _,
+            bombs_remaining: _,
+            safe_remaining: _,
+            safe_revealed: _,
+            revealed_mask: _,
+            current_multiplier: _,
+            status: _,
+            start_epoch: _,
+            reserved_amount,
+        } = game;
+
+        // 押注沒收進金庫
+        let confiscated = balance::value(&bet_balance);
+        balance::join(&mut platform.treasury, bet_balance);
+
+        // 釋放預留資金
+        platform.reserved = platform.reserved - reserved_amount;
+
+        let game_id = object::uid_to_inner(&id);
+        event::emit(GameExpired {
+            game_id,
+            player,
+            bet_confiscated: confiscated,
+            reserved_released: reserved_amount,
+        });
+
         object::delete(id);
     }
 
@@ -515,6 +623,17 @@ module gamefi::mines {
         paused: bool,
     ) {
         platform.paused = paused;
+    }
+
+    /// 設定單局最大賠付上限
+    /// 必須大於 max_bet，否則玩家即使押最大注也無法贏回押注
+    public fun set_max_single_payout(
+        _: &AdminCap,
+        platform: &mut GamePlatform,
+        max_single_payout: u64,
+    ) {
+        assert!(max_single_payout > platform.max_bet, EInvalidPayoutCap);
+        platform.max_single_payout = max_single_payout;
     }
 
     // === 查詢函數（view） ===
@@ -575,5 +694,25 @@ module gamefi::mines {
     /// 查詢最高押注
     public fun max_bet(platform: &GamePlatform): u64 {
         platform.max_bet
+    }
+
+    /// 查詢單局最大賠付上限
+    public fun max_single_payout(platform: &GamePlatform): u64 {
+        platform.max_single_payout
+    }
+
+    /// 查詢遊戲開局 epoch
+    public fun get_session_start_epoch(game: &GameSession): u64 {
+        game.start_epoch
+    }
+
+    /// 查詢本局預留金額
+    public fun get_reserved_amount(game: &GameSession): u64 {
+        game.reserved_amount
+    }
+
+    /// 查詢超時門檻（start_epoch + SESSION_EXPIRE_EPOCHS）
+    public fun get_session_expire_epoch(game: &GameSession): u64 {
+        game.start_epoch + SESSION_EXPIRE_EPOCHS
     }
 }
