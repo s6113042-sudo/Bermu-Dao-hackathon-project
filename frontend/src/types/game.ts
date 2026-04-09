@@ -44,8 +44,23 @@ export interface GameState {
   revealDigests: string[]
 }
 
-/** PlayerBalance 鏈上對象結構 */
+/** 單局歷史記錄（用於公平性驗證的歷史查詢） */
+export interface GameHistory {
+  /** 唯一識別（開局時間戳） */
+  id: number
+  /** 遊戲結果 */
+  phase: 'cashed_out' | 'exploded'
+  /** 本局所有翻格子的 tx digest */
+  digests: string[]
+  /** 押注金額（MIST，序列化為字串） */
+  betAmount: string
+  /** 結束時間戳（ms） */
+  timestamp: number
+}
+
+/** PlayerBalance 鏈上對象結構（content.fields 解析後） */
 export interface PlayerBalanceFields {
   id: { id: string }
+  /** Balance<SUI> 序列化為 { value: string }（u64 字串） */
   balance: { value: string }
 }

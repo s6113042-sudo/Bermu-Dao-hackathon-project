@@ -107,4 +107,18 @@
     background: rgba(0, 0, 0, 0.7);
     backdrop-filter: blur(4px);
   }
+
+  /* 翻格等待動畫 */
+  .tile-flipping {
+    animation: tile-flip 0.7s ease-in-out infinite;
+    border-color: rgba(167, 139, 250, 0.8) !important;
+  }
+}
+
+@keyframes tile-flip {
+  0%   { transform: rotateY(0deg) scale(1); }
+  25%  { transform: rotateY(45deg) scale(0.92); }
+  50%  { transform: rotateY(0deg) scale(0.88); background: rgba(109,40,217,0.5); }
+  75%  { transform: rotateY(-45deg) scale(0.92); }
+  100% { transform: rotateY(0deg) scale(1); }
 }

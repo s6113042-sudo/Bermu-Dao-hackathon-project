@@ -1,4 +1,4 @@
-import { MULTIPLIER_SCALE, MIST_PER_SUI } from '../lib/constants'
+import { MULTIPLIER_SCALE, MIST_PER_SUI, HOUSE_EDGE_BPS } from '../lib/constants'
 
 interface MultiplierDisplayProps {
   multiplier: bigint
@@ -11,16 +11,16 @@ export default function MultiplierDisplay({
   betAmount,
   safeRevealed,
 }: MultiplierDisplayProps) {
-  // 將原始精度值轉為顯示用的倍數字串
-  const displayMultiplier =
-    multiplier > 0n
-      ? (Number(multiplier) / Number(MULTIPLIER_SCALE)).toFixed(4)
-      : '1.0000'
+  // 合約儲存的是「公平倍數」，顯示時套用一次性莊家優勢折扣
+  // displayMultiplier = fairMultiplier × (1 - house_edge)
+  const fairMult = multiplier > 0n ? Number(multiplier) / Number(MULTIPLIER_SCALE) : 1
+  const adjustedMult = fairMult * (1 - HOUSE_EDGE_BPS / 10000)
+  const displayMultiplier = adjustedMult.toFixed(4)
 
-  // 計算潛在賠付（MIST → SUI）
+  // 計算潛在賠付（MIST → SUI），同樣套用莊家優勢折扣
   const potentialPayout =
     betAmount > 0n && multiplier > 0n
-      ? Number((betAmount * multiplier) / MULTIPLIER_SCALE) / Number(MIST_PER_SUI)
+      ? (Number(betAmount) * adjustedMult) / Number(MIST_PER_SUI)
       : 0
 
   return (

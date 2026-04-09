@@ -190,7 +190,7 @@ module gamefi::mines {
             id: object::new(ctx),
             treasury: balance::zero(),
             reserved: 0,
-            house_edge_bps: 300,                       // 預設 3% 莊家優勢
+            house_edge_bps: 500,                       // 預設 5% 莊家優勢
             min_bet: 1_000_000,                        // 最低 0.001 SUI
             max_bet: 10_000_000_000,                   // 最高 10 SUI
             max_single_payout: DEFAULT_MAX_SINGLE_PAYOUT, // 最高單局賠付 50 SUI
@@ -385,23 +385,31 @@ module gamefi::mines {
             game.safe_remaining = game.safe_remaining - 1;
             game.safe_revealed = game.safe_revealed + 1;
 
-            // 倍數公式（每步）：
-            //   new_multiplier = old_multiplier
-            //                  × (tiles_before / safe_before)   ← 公平期望值倒數
-            //                  × (1 - house_edge)               ← 莊家優勢折扣
+            // 倍數公式（每步，儲存「公平倍數」，莊家優勢僅於結算時一次性扣除）：
+            //   new_multiplier = old_multiplier × (tiles_before / safe_before)
+            //
+            // 此公式使得：
+            //   multiplier(n) = ∏(tiles_i / safe_i)  = 1 / P(連翻 n 格安全)
+            //
+            // 結算時套用一次 (1 - house_edge)：
+            //   payout = bet × multiplier × (1 - house_edge)
+            //
+            // 效果：無論翻幾格，莊家優勢恆為 5%（非複利累加）
             //
             // 以整數運算（u128 避免溢出）：
-            //   new = old * tiles_before * (10000 - house_edge_bps) / safe_before / 10000
+            //   new = old * tiles_before / safe_before
             let new_mult = (game.current_multiplier as u128)
                 * (tiles_before as u128)
-                * ((10000 - platform.house_edge_bps) as u128)
-                / (safe_before as u128)
-                / 10000u128;
+                / (safe_before as u128);
             game.current_multiplier = new_mult as u64;
 
+            // 潛在賠付含一次性莊家優勢折扣：
+            //   potential = bet × multiplier × (10000 - house_edge_bps) / SCALE / 10000
             let potential_payout = (game.bet_amount as u128)
                 * (game.current_multiplier as u128)
-                / (MULTIPLIER_SCALE as u128);
+                * ((10000 - platform.house_edge_bps) as u128)
+                / (MULTIPLIER_SCALE as u128)
+                / 10000u128;
 
             event::emit(TileRevealed {
                 game_id: object::id(game),
@@ -443,10 +451,13 @@ module gamefi::mines {
             reserved_amount,
         } = game;
 
-        // 計算應付金額：bet * multiplier / SCALE
+        // 計算應付金額：bet × fair_multiplier × (1 - house_edge) / SCALE
+        // 莊家優勢僅此一次扣除，無論玩家翻了幾格，house edge 恆為固定比例
         let raw_payout = ((bet_amount as u128)
             * (current_multiplier as u128)
-            / (MULTIPLIER_SCALE as u128)) as u64;
+            * ((10000 - platform.house_edge_bps) as u128)
+            / (MULTIPLIER_SCALE as u128)
+            / 10000u128) as u64;
 
         // 封頂：單局賠付不超過 max_single_payout
         // 即使玩家達到極高倍數，金庫最多支付此上限
@@ -643,12 +654,16 @@ module gamefi::mines {
         balance::value(&pb.balance)
     }
 
-    /// 計算若此刻收手可獲得的金額
+    /// 計算若此刻收手可獲得的金額（含 5% 莊家優勢折扣）
+    /// 注意：此函式無法讀取 platform 的 house_edge_bps，故使用固定常數 500 bps
+    /// 若需精確值，請在前端以 TileRevealed 事件的 potential_payout 欄位為準
     public fun get_potential_payout(game: &GameSession): u64 {
         if (game.status != STATUS_ACTIVE) return 0;
         ((game.bet_amount as u128)
             * (game.current_multiplier as u128)
-            / (MULTIPLIER_SCALE as u128)) as u64
+            * 9500u128
+            / (MULTIPLIER_SCALE as u128)
+            / 10000u128) as u64
     }
 
     /// 查詢當前倍數（原始精度值，需除以 MULTIPLIER_SCALE 得到倍數）

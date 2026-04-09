@@ -8,14 +8,14 @@
  * 來源：sui client publish 輸出的 PackageID
  */
 export const PACKAGE_ID =
-  '0xcc62906620702ac07565ef6504012207017e02f1a80c58adc201fd94d19932e1'
+  '0x7fda537a472632fdf4f33c219bd1e74b7acd393e2ab3116a354b1cfc250bb006'
 
 /**
  * GamePlatform 共享對象 ID
  * 來源：publish 後 Created Objects 中 Owner: Shared 的那個
  */
 export const GAME_PLATFORM_ID =
-  '0xd8e99ac87f6a8e0b8d6ed63e32bfea4d944785ae7ce786b1ebf739b896d383ef'
+  '0x8e26967b18b79bf4914a3e5dcebda9e8676103d756b505c4642764c3ddf33f73'
 
 /**
  * Sui 鏈上 Random 共享對象（固定地址，所有網絡通用）
@@ -39,6 +39,9 @@ export const BOMB_COUNT = 5
 
 /** 倍數精度（合約中 MULTIPLIER_SCALE = 1_000_000_000） */
 export const MULTIPLIER_SCALE = 1_000_000_000n
+
+/** 莊家優勢（basis points，500 = 5%）— 與合約 house_edge_bps 保持一致 */
+export const HOUSE_EDGE_BPS = 500
 
 /** 1 SUI = 1_000_000_000 MIST */
 export const MIST_PER_SUI = 1_000_000_000n

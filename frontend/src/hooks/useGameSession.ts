@@ -1,37 +1,29 @@
 /**
  * useGameSession
  *
- * 管理單局遊戲的完整生命週期：
- *   start_game → reveal_tile × N → cashout / destroy_exploded_game
+ * 管理單局遊戲的完整生命週期。
+ * 所有操作均由 session key 靜默執行，無需錢包彈窗。
  *
- * ── 整合待辦 ──
- * 每個函數需建構對應的 PTB（Transaction）並用 useSignAndExecuteTransaction 送出。
- * 結果解析後更新本地 gameState。
- *
- * 目前回傳 mock 狀態和空函數，等待整合。
+ * 歷史記錄：遊戲結束後自動儲存至 localStorage，最多保留 5 場。
  */
 
-import { useState } from 'react'
-import { GameState, TileState } from '../types/game'
-import { GRID_SIZE } from '../lib/constants'
+import { useState, useEffect } from 'react'
+import { Transaction } from '@mysten/sui/transactions'
+import { GameState, TileState, GameHistory } from '../types/game'
+import {
+  PACKAGE_ID,
+  MODULE_NAME,
+  GAME_PLATFORM_ID,
+  RANDOM_OBJECT_ID,
+  GRID_SIZE,
+} from '../lib/constants'
+import { UseSessionKeyResult } from './useSessionKey'
 
-// TODO: 解開以下 import 並實作
-// import { useCurrentAccount, useSignAndExecuteTransaction } from '@mysten/dapp-kit'
-// import { Transaction } from '@mysten/sui/transactions'
-// import {
-//   PACKAGE_ID, MODULE_NAME, GAME_PLATFORM_ID, RANDOM_OBJECT_ID
-// } from '../lib/constants'
-// import { usePlayerBalance } from './usePlayerBalance'
+const HISTORY_STORAGE_KEY = 'mines_game_history'
+const MAX_HISTORY = 10
 
-// 初始 16 格全為 hidden
 function initialTiles(): TileState[] {
   return Array(GRID_SIZE).fill('hidden') as TileState[]
-}
-
-// Mock 用：模擬合約的懶惰概率採樣
-// P(炸彈) = bombs_remaining / tiles_remaining
-function mockIsBomb(bombsLeft: number, tilesLeft: number): boolean {
-  return Math.random() < bombsLeft / tilesLeft
 }
 
 const initialState: GameState = {
@@ -39,205 +31,279 @@ const initialState: GameState = {
   phase: 'idle',
   betAmount: 0n,
   tiles: initialTiles(),
-  currentMultiplier: 1_000_000_000n, // 1.0x
+  currentMultiplier: 1_000_000_000n,
   safeRevealed: 0,
   revealDigests: [],
 }
 
-// Mock 用：追蹤剩餘炸彈數和格子數（真實整合後由鏈上事件更新）
-interface MockCounters {
-  bombsLeft: number
-  tilesLeft: number
+// ── localStorage helpers ──
+
+function loadHistory(): GameHistory[] {
+  try {
+    const raw = localStorage.getItem(HISTORY_STORAGE_KEY)
+    if (!raw) return []
+    return JSON.parse(raw) as GameHistory[]
+  } catch {
+    return []
+  }
+}
+
+function saveHistory(history: GameHistory[]) {
+  try {
+    localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history))
+  } catch {
+    // 靜默失敗（私密瀏覽模式可能拒絕寫入）
+  }
+}
+
+function appendHistory(entry: GameHistory): GameHistory[] {
+  const prev = loadHistory()
+  const next = [entry, ...prev].slice(0, MAX_HISTORY)
+  saveHistory(next)
+  return next
 }
 
 export interface UseGameSessionResult {
   gameState: GameState
   isProcessing: boolean
-  startGame: (betAmountMist: bigint) => Promise<void>
+  error: string | null
+  gameHistory: GameHistory[]
+  startGame: (betAmountMist: bigint, playerBalanceId: string) => Promise<void>
   revealTile: (index: number) => Promise<void>
-  cashout: () => Promise<void>
+  cashout: (playerBalanceId: string) => Promise<void>
   destroyExploded: () => Promise<void>
+  resetGame: () => void
 }
 
-export function useGameSession(): UseGameSessionResult {
+export function useGameSession(session: UseSessionKeyResult): UseGameSessionResult {
+  const { sessionAddress, executeWithSession } = session
   const [gameState, setGameState] = useState<GameState>(initialState)
   const [isProcessing, setIsProcessing] = useState(false)
-  // Mock 用計數器（整合後移除，改由鏈上事件驅動）
-  const [mockCounters, setMockCounters] = useState<MockCounters>({ bombsLeft: 5, tilesLeft: 16 })
+  const [error, setError] = useState<string | null>(null)
+  const [gameHistory, setGameHistory] = useState<GameHistory[]>(() => loadHistory())
 
-  // ════════════════════════════════════════════════
-  // TODO: 整合 startGame
-  //
-  // 1. 建構 PTB：
-  //    const tx = new Transaction()
-  //    const [gameSession] = tx.moveCall({
-  //      target: `${PACKAGE_ID}::${MODULE_NAME}::start_game`,
-  //      arguments: [
-  //        tx.object(GAME_PLATFORM_ID),          // platform
-  //        tx.object(playerBalanceId),            // player_balance
-  //        tx.pure.u64(betAmountMist),            // bet_amount
-  //      ],
-  //    })
-  //    tx.moveCall({
-  //      target: `${PACKAGE_ID}::${MODULE_NAME}::keep_game`,
-  //      arguments: [gameSession],
-  //    })
-  //
-  // 2. 執行後從 effects.created 取出 GameSession object ID
-  // 3. 更新 gameState.phase = 'playing', sessionId, betAmount
-  // ════════════════════════════════════════════════
-  const startGame = async (betAmountMist: bigint) => {
+  // 開局時記錄時間戳，用於歷史記錄 id
+  const [gameStartTime, setGameStartTime] = useState<number>(0)
+
+  // ── 開始新遊戲（session key，無彈窗）──
+  const startGame = async (betAmountMist: bigint, playerBalanceId: string) => {
     setIsProcessing(true)
+    setError(null)
     try {
-      console.warn('[TODO] startGame: 尚未整合，betAmount =', betAmountMist.toString())
-      // Mock：進入 playing 狀態，重設計數器
-      setMockCounters({ bombsLeft: 5, tilesLeft: 16 })
+      const tx = new Transaction()
+      const [gameSession] = tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::start_game`,
+        arguments: [
+          tx.object(GAME_PLATFORM_ID),
+          tx.object(playerBalanceId),
+          tx.pure.u64(betAmountMist),
+        ],
+      })
+      tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::keep_game`,
+        arguments: [gameSession],
+      })
+
+      const { effects } = await executeWithSession(tx)
+
+      // 從 effects.created 找 GameSession 對象 ID
+      const created = effects?.created ?? []
+      const sessionObj = created.find(
+        (obj: any) =>
+          obj.owner &&
+          typeof obj.owner === 'object' &&
+          'AddressOwner' in obj.owner &&
+          obj.owner.AddressOwner === sessionAddress
+      )
+      const sessionId: string | null = sessionObj?.reference?.objectId ?? null
+
+      const now = Date.now()
+      setGameStartTime(now)
       setGameState({
         ...initialState,
-        sessionId: 'mock-session-id',
+        sessionId,
         phase: 'playing',
         betAmount: betAmountMist,
         tiles: initialTiles(),
       })
+    } catch (e: any) {
+      setError(parseError(e))
     } finally {
       setIsProcessing(false)
     }
   }
 
-  // ════════════════════════════════════════════════
-  // TODO: 整合 revealTile
-  //
-  // 1. 建構 PTB：
-  //    const tx = new Transaction()
-  //    tx.moveCall({
-  //      target: `${PACKAGE_ID}::${MODULE_NAME}::reveal_tile`,
-  //      arguments: [
-  //        tx.object(GAME_PLATFORM_ID),           // platform
-  //        tx.object(gameState.sessionId!),        // game (mut)
-  //        tx.pure.u64(index),                    // tile_index
-  //        tx.object(RANDOM_OBJECT_ID),           // rand: &Random (0x8)
-  //      ],
-  //    })
-  //
-  // 2. 執行後解析 TileRevealed 事件：
-  //    - is_bomb: true → tiles[index] = 'bomb', phase = 'exploded'
-  //    - is_bomb: false → tiles[index] = 'safe', 更新 multiplier
-  // 3. 儲存 tx digest 到 revealDigests
-  // ════════════════════════════════════════════════
+  // ── 揭開格子（session key，無彈窗）──
   const revealTile = async (index: number) => {
-    if (gameState.phase !== 'playing' || isProcessing) return
+    if (gameState.phase !== 'playing' || isProcessing || !gameState.sessionId) return
     setIsProcessing(true)
+    setError(null)
     try {
-      console.warn('[TODO] revealTile: 尚未整合，index =', index)
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::reveal_tile`,
+        arguments: [
+          tx.object(GAME_PLATFORM_ID),
+          tx.object(gameState.sessionId),
+          tx.pure.u64(index),
+          tx.object(RANDOM_OBJECT_ID),
+        ],
+      })
 
-      const { bombsLeft, tilesLeft } = mockCounters
-      const isBomb = mockIsBomb(bombsLeft, tilesLeft)
+      const { digest, events } = await executeWithSession(tx)
 
-      if (isBomb) {
-        // ── 炸彈！ ──
-        setMockCounters((c) => ({ ...c, bombsLeft: c.bombsLeft - 1, tilesLeft: c.tilesLeft - 1 }))
+      const tileEvent = events.find((e: any) => e.type?.includes('TileRevealed'))
+      if (!tileEvent) throw new Error('未收到 TileRevealed 事件')
+
+      const { is_bomb, multiplier } = tileEvent.parsedJson as {
+        is_bomb: boolean
+        multiplier: string
+      }
+
+      if (is_bomb) {
         setGameState((prev) => {
           const newTiles = [...prev.tiles]
           newTiles[index] = 'bomb'
+          const newDigests = [...prev.revealDigests, digest]
+
+          // 儲存爆炸記錄到歷史
+          const entry: GameHistory = {
+            id: gameStartTime,
+            phase: 'exploded',
+            digests: newDigests,
+            betAmount: prev.betAmount.toString(),
+            timestamp: Date.now(),
+          }
+          const updated = appendHistory(entry)
+          setGameHistory(updated)
+
           return {
             ...prev,
             tiles: newTiles,
             phase: 'exploded',
             currentMultiplier: 0n,
-            revealDigests: [...prev.revealDigests, `mock-digest-${index}`],
+            revealDigests: newDigests,
           }
         })
       } else {
-        // ── 安全格！更新倍數（模擬合約公式）──
-        const newBombsLeft = bombsLeft
-        const newTilesLeft = tilesLeft - 1
-        setMockCounters({ bombsLeft: newBombsLeft, tilesLeft: newTilesLeft })
-
         setGameState((prev) => {
           const newTiles = [...prev.tiles]
           newTiles[index] = 'safe'
-
-          // 模擬倍數公式：new = old * tilesLeft / safeLeft * (1 - 0.03)
-          const safeLeft = tilesLeft - bombsLeft
-          const newMult =
-            (prev.currentMultiplier * BigInt(tilesLeft) * 9700n) /
-            BigInt(safeLeft) /
-            10000n
-
-          // 若已全部翻完安全格，強制收手
-          const newSafeRevealed = prev.safeRevealed + 1
-          const phase = newSafeRevealed >= 11 ? 'cashed_out' : 'playing'
-
           return {
             ...prev,
             tiles: newTiles,
-            phase,
-            safeRevealed: newSafeRevealed,
-            currentMultiplier: newMult,
-            revealDigests: [...prev.revealDigests, `mock-digest-${index}`],
+            phase: 'playing',
+            safeRevealed: prev.safeRevealed + 1,
+            currentMultiplier: BigInt(multiplier),
+            revealDigests: [...prev.revealDigests, digest],
           }
         })
       }
+    } catch (e: any) {
+      setError(parseError(e))
     } finally {
       setIsProcessing(false)
     }
   }
 
-  // ════════════════════════════════════════════════
-  // TODO: 整合 cashout
-  //
-  // 1. 建構 PTB：
-  //    const tx = new Transaction()
-  //    tx.moveCall({
-  //      target: `${PACKAGE_ID}::${MODULE_NAME}::cashout`,
-  //      arguments: [
-  //        tx.object(GAME_PLATFORM_ID),
-  //        tx.object(gameState.sessionId!),
-  //        tx.object(playerBalanceId),
-  //      ],
-  //    })
-  //
-  // 2. 成功後：phase = 'cashed_out'，更新 playerBalance
-  // ════════════════════════════════════════════════
-  const cashout = async () => {
-    if (gameState.phase !== 'playing' || isProcessing) return
+  // ── 收手（session key，無彈窗）──
+  const cashout = async (playerBalanceId: string) => {
+    if (gameState.phase !== 'playing' || isProcessing || !gameState.sessionId) return
     setIsProcessing(true)
+    setError(null)
     try {
-      console.warn('[TODO] cashout: 尚未整合')
-      setGameState((prev) => ({ ...prev, phase: 'cashed_out' }))
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::cashout`,
+        arguments: [
+          tx.object(GAME_PLATFORM_ID),
+          tx.object(gameState.sessionId),
+          tx.object(playerBalanceId),
+        ],
+      })
+      await executeWithSession(tx)
+
+      setGameState((prev) => {
+        // 儲存收手記錄到歷史
+        const entry: GameHistory = {
+          id: gameStartTime,
+          phase: 'cashed_out',
+          digests: prev.revealDigests,
+          betAmount: prev.betAmount.toString(),
+          timestamp: Date.now(),
+        }
+        const updated = appendHistory(entry)
+        setGameHistory(updated)
+
+        return { ...prev, phase: 'cashed_out' }
+      })
+    } catch (e: any) {
+      setError(parseError(e))
     } finally {
       setIsProcessing(false)
     }
   }
 
-  // ════════════════════════════════════════════════
-  // TODO: 整合 destroyExploded
-  //
-  // 爆炸 → 呼叫 destroy_exploded_game 清理鏈上對象，然後重設為 idle
-  //
-  //    const tx = new Transaction()
-  //    tx.moveCall({
-  //      target: `${PACKAGE_ID}::${MODULE_NAME}::destroy_exploded_game`,
-  //      arguments: [tx.object(gameState.sessionId!)],
-  //    })
-  // ════════════════════════════════════════════════
+  // ── 清理爆炸遊戲（session key，無彈窗）──
   const destroyExploded = async () => {
-    setIsProcessing(true)
-    try {
-      console.warn('[TODO] destroyExploded: 尚未整合')
-      // 重設遊戲狀態
+    if (!gameState.sessionId) {
       setGameState(initialState)
+      return
+    }
+    setIsProcessing(true)
+    setError(null)
+    try {
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::destroy_exploded_game`,
+        arguments: [tx.object(gameState.sessionId)],
+      })
+      await executeWithSession(tx)
+    } catch (e: any) {
+      setError(parseError(e))
     } finally {
       setIsProcessing(false)
+      setGameState(initialState)
     }
+  }
+
+  const resetGame = () => {
+    setGameState(initialState)
+    setError(null)
   }
 
   return {
     gameState,
     isProcessing,
+    error,
+    gameHistory,
     startGame,
     revealTile,
     cashout,
     destroyExploded,
+    resetGame,
   }
+}
+
+/** 解析合約 abort code 為可讀訊息 */
+function parseError(e: any): string {
+  const msg: string = e?.message ?? String(e)
+  const match = msg.match(/abort code: (\d+)/)
+  if (match) {
+    const code = parseInt(match[1])
+    const codes: Record<number, string> = {
+      1: '餘額不足',
+      2: '押注金額太小',
+      3: '押注金額太大',
+      4: '遊戲已結束',
+      5: '無效格子',
+      6: '該格已翻開',
+      7: '金庫資金不足，請聯繫管理員',
+      8: '平台暫停中',
+      9: '所有安全格已翻完，請收手',
+      14: '押注超過單局賠付上限',
+    }
+    return codes[code] ?? `合約錯誤 (${code})`
+  }
+  return msg.length > 120 ? msg.slice(0, 120) + '…' : msg
 }
