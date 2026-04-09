@@ -72,6 +72,11 @@ export default function App() {
     game.cashout(playerBalance.playerBalanceId)
   }
 
+  const handleCancel = () => {
+    if (!playerBalance.playerBalanceId) return
+    game.cancelGame(playerBalance.playerBalanceId)
+  }
+
   // 再玩一局：直接用相同押注金額開始下一局，不需要再按 Play
   const handleRestart = () => {
     if (!playerBalance.playerBalanceId) {
@@ -139,6 +144,7 @@ export default function App() {
             onDouble={handleDoubleBet}
             onPlay={handlePlay}
             onCashout={handleCashout}
+            onCancel={handleCancel}
             phase={game.gameState.phase}
             isProcessing={game.isProcessing}
             revealDigests={game.gameState.revealDigests}
@@ -146,6 +152,7 @@ export default function App() {
             onResetGame={handleRestart}
             needsCreate={playerBalance.needsCreate}
             playerBalance={playerBalance.balance}
+            safeRevealed={game.gameState.safeRevealed}
           />
         </div>
       </main>

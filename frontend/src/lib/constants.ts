@@ -8,14 +8,14 @@
  * 來源：sui client publish 輸出的 PackageID
  */
 export const PACKAGE_ID =
-  '0x7fda537a472632fdf4f33c219bd1e74b7acd393e2ab3116a354b1cfc250bb006'
+  '0x59675e77b17319852b0a13e35003b4cfebcbb24d1245cae6ebccf7b2755e6500'
 
 /**
  * GamePlatform 共享對象 ID
  * 來源：publish 後 Created Objects 中 Owner: Shared 的那個
  */
 export const GAME_PLATFORM_ID =
-  '0x8e26967b18b79bf4914a3e5dcebda9e8676103d756b505c4642764c3ddf33f73'
+  '0x091eb4a3e6abad939b518d2807f5e97b7df9bdee24bf393484c162e3c87a3ade'
 
 /**
  * Sui 鏈上 Random 共享對象（固定地址，所有網絡通用）

@@ -7,7 +7,7 @@
  * 歷史記錄：遊戲結束後自動儲存至 localStorage，最多保留 5 場。
  */
 
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { Transaction } from '@mysten/sui/transactions'
 import { GameState, TileState, GameHistory } from '../types/game'
 import {
@@ -71,6 +71,7 @@ export interface UseGameSessionResult {
   startGame: (betAmountMist: bigint, playerBalanceId: string) => Promise<void>
   revealTile: (index: number) => Promise<void>
   cashout: (playerBalanceId: string) => Promise<void>
+  cancelGame: (playerBalanceId: string) => Promise<void>
   destroyExploded: () => Promise<void>
   resetGame: () => void
 }
@@ -267,6 +268,42 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
     }
   }
 
+  // ── 取消遊戲（0 次翻格，全額退款）──
+  const cancelGame = async (playerBalanceId: string) => {
+    if (gameState.phase !== 'playing' || isProcessing || !gameState.sessionId) return
+    setIsProcessing(true)
+    setError(null)
+    try {
+      const tx = new Transaction()
+      tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::cancel_game`,
+        arguments: [
+          tx.object(GAME_PLATFORM_ID),
+          tx.object(gameState.sessionId),
+          tx.object(playerBalanceId),
+        ],
+      })
+      await executeWithSession(tx)
+
+      setGameState((prev) => {
+        const entry: GameHistory = {
+          id: gameStartTime,
+          phase: 'cashed_out',
+          digests: prev.revealDigests,
+          betAmount: prev.betAmount.toString(),
+          timestamp: Date.now(),
+        }
+        const updated = appendHistory(entry)
+        setGameHistory(updated)
+        return { ...prev, phase: 'cashed_out' }
+      })
+    } catch (e: any) {
+      setError(parseError(e))
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
   const resetGame = () => {
     setGameState(initialState)
     setError(null)
@@ -280,6 +317,7 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
     startGame,
     revealTile,
     cashout,
+    cancelGame,
     destroyExploded,
     resetGame,
   }
@@ -301,6 +339,8 @@ function parseError(e: any): string {
       7: '金庫資金不足，請聯繫管理員',
       8: '平台暫停中',
       9: '所有安全格已翻完，請收手',
+      13: '對局尚未超時',
+      16: '翻格後無法取消遊戲',
       14: '押注超過單局賠付上限',
     }
     return codes[code] ?? `合約錯誤 (${code})`

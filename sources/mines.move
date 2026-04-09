@@ -71,6 +71,7 @@ module gamefi::mines {
     const ESessionNotExpired: u64 = 13;
     const EBetExceedsSinglePayoutCap: u64 = 14;
     const EInvalidPayoutCap: u64 = 15;
+    const ECannotCancelAfterReveal: u64 = 16;
 
     // === 結構體 ===
 
@@ -180,6 +181,14 @@ module gamefi::mines {
         bet_confiscated: u64,
         /// 釋放的預留資金
         reserved_released: u64,
+    }
+
+    public struct GameCancelled has copy, drop {
+        game_id: ID,
+        player: address,
+        /// 全額退回的押注金額
+        bet_amount: u64,
+        bet_refunded: u64,
     }
 
     // === 初始化 ===
@@ -495,6 +504,51 @@ module gamefi::mines {
             player,
             safe_revealed,
             payout,
+        });
+
+        object::delete(id);
+    }
+
+    /// 取消尚未翻格的遊戲（全額退款，不扣莊家優勢）
+    ///
+    /// 僅允許在 safe_revealed == 0 時呼叫（翻格後不可取消）
+    /// 押注全額退回玩家帳戶，預留資金釋放
+    public fun cancel_game(
+        platform: &mut GamePlatform,
+        game: GameSession,
+        player_balance: &mut PlayerBalance,
+    ) {
+        assert!(game.status == STATUS_ACTIVE, EGameNotActive);
+        assert!(game.safe_revealed == 0, ECannotCancelAfterReveal);
+
+        let GameSession {
+            id,
+            player,
+            bet_amount,
+            bet_balance,
+            tiles_remaining: _,
+            bombs_remaining: _,
+            safe_remaining: _,
+            safe_revealed: _,
+            revealed_mask: _,
+            current_multiplier: _,
+            status: _,
+            start_epoch: _,
+            reserved_amount,
+        } = game;
+
+        // 全額退回押注，不扣莊家優勢
+        balance::join(&mut player_balance.balance, bet_balance);
+
+        // 釋放預留資金
+        platform.reserved = platform.reserved - reserved_amount;
+
+        let game_id = object::uid_to_inner(&id);
+        event::emit(GameCancelled {
+            game_id,
+            player,
+            bet_amount,
+            bet_refunded: bet_amount,
         });
 
         object::delete(id);

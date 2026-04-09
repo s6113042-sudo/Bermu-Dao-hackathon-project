@@ -11,8 +11,10 @@ import { MIST_PER_SUI } from '../lib/constants'
 import { UseSessionKeyResult } from '../hooks/useSessionKey'
 import { UsePlayerBalanceResult } from '../hooks/usePlayerBalance'
 
-/** 保留給 gas 的最低 session SUI（每筆 tx ~0.003 SUI，保留 0.05 SUI ≈ 15 筆） */
-const GAS_RESERVE = 50_000_000n // 0.05 SUI
+/** 預扣 gas 的門檻：session 餘額低於此值才需預扣 */
+const GAS_THRESHOLD = 5_000_000n  // 0.005 SUI
+/** 預扣 gas 金額（首次或餘額不足時） */
+const GAS_RESERVE = 50_000_000n   // 0.05 SUI
 
 interface BalanceModalProps {
   session: UseSessionKeyResult
@@ -21,8 +23,11 @@ interface BalanceModalProps {
 }
 
 export default function BalanceModal({ session, playerBalance, onClose }: BalanceModalProps) {
-  const { fundSession } = session
+  const { fundSession, sessionSuiBalance } = session
   const { balance, needsCreate, isLoading, deposit, withdraw, createPlayerBalance } = playerBalance
+
+  // 是否需要預扣 gas：首次（null / 0）或低於門檻
+  const needsGasTopup = sessionSuiBalance === null || sessionSuiBalance < GAS_THRESHOLD
 
   const [tab, setTab] = useState<'deposit' | 'withdraw'>('deposit')
   const [input, setInput] = useState('1')
@@ -41,8 +46,9 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
 
   // ── 充值：主錢包 → 遊戲餘額（一次授權）──
   const handleDeposit = async () => {
-    if (amountMist <= GAS_RESERVE) {
-      setMsg({ type: 'err', text: `最少充值 0.1 SUI` })
+    const minRequired = needsGasTopup ? GAS_RESERVE + 1_000_000n : 1_000_000n
+    if (amountMist < minRequired) {
+      setMsg({ type: 'err', text: needsGasTopup ? '首次充值最少 0.06 SUI（含 0.05 Gas）' : '最少充值 0.001 SUI' })
       return
     }
     setBusy(true)
@@ -57,8 +63,8 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
         pbId = await createPlayerBalance()
       }
 
-      // 扣除 gas 保留，其餘全存入遊戲餘額（靜默）
-      const depositAmount = amountMist - GAS_RESERVE
+      // 僅在 session 餘額不足時預扣 gas，否則全額存入遊戲餘額
+      const depositAmount = needsGasTopup ? amountMist - GAS_RESERVE : amountMist
       await deposit(depositAmount, pbId)
 
       setMsg({ type: 'ok', text: '充值成功！之後 Play、翻格、Cashout 全無需授權。' })
@@ -133,9 +139,7 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
 
         {/* 金額輸入 */}
         <div className="flex items-center gap-2">
-          <div className="w-5 h-5 rounded-full bg-blue-400 flex-shrink-0 flex items-center justify-center">
-            <span className="text-white text-xs font-bold">S</span>
-          </div>
+          <SuiIcon />
           <input
             type="number"
             value={input}
@@ -161,6 +165,11 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
             <p className="text-xs text-gray-500 text-center">
               充值後 Play / 翻格 / Cashout 全程無需再次授權
             </p>
+            {needsGasTopup && (
+              <p className="text-xs text-center" style={{ color: '#a78bfa' }}>
+                ⚠ 首次充值將預扣 0.05 SUI 作為 Gas 費用
+              </p>
+            )}
           </>
         ) : (
           <>
@@ -194,6 +203,16 @@ function Spinner() {
   return (
     <svg className="animate-spin mx-auto" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M12 2v4M12 18v4M4.93 4.93l2.83 2.83M16.24 16.24l2.83 2.83M2 12h4M18 12h4M4.93 19.07l2.83-2.83M16.24 7.76l2.83-2.83" />
+    </svg>
+  )
+}
+
+function SuiIcon() {
+  return (
+    <svg width="22" height="22" viewBox="0 0 82 82" fill="none" xmlns="http://www.w3.org/2000/svg" className="flex-shrink-0">
+      <circle cx="41" cy="41" r="41" fill="#6fbcf0" />
+      <path d="M54.5 28.5C52.8 26 50.5 24.2 47.8 23.3c-2.7-.9-5.7-.9-8.4 0-2.7.9-5 2.7-6.7 5.2L24.5 41c-3.3 4.9-3.3 11.3 0 16.2l4.2 6.2c2 3 5.3 4.7 8.8 4.7h6.6c3.5 0 6.8-1.7 8.8-4.7l4.2-6.2c3.3-4.9 3.3-11.3 0-16.2L54.5 28.5z" fill="white" />
+      <path d="M36.5 53.5c1.2 1.8 3.2 2.9 5.4 2.9h3c2.2 0 4.2-1.1 5.4-2.9l3-4.5c2.4-3.5 2.4-8.1 0-11.6l-2.4-3.6c-.5.4-1.1.6-1.8.6-1.7 0-3-1.4-3-3.1 0-.6.2-1.1.4-1.6l-2.1-3.1c-.8-1.2-2.2-2-3.8-2s-3 .8-3.8 2l-2.1 3.1c.2.5.4 1 .4 1.6 0 1.7-1.3 3.1-3 3.1-.7 0-1.3-.2-1.8-.6L28.4 37c-2.4 3.5-2.4 8.1 0 11.6l1.5 2.2 6.6 2.7z" fill="#6fbcf0" />
     </svg>
   )
 }

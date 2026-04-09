@@ -9,6 +9,7 @@ interface BetControlsProps {
   onDouble: () => void
   onPlay: () => void
   onCashout: () => void
+  onCancel: () => void
   onDestroyExploded: () => void
   onResetGame: () => void
   phase: GamePhase
@@ -16,6 +17,7 @@ interface BetControlsProps {
   revealDigests: string[]
   needsCreate: boolean
   playerBalance: bigint | null
+  safeRevealed: number
 }
 
 export default function BetControls({
@@ -25,12 +27,14 @@ export default function BetControls({
   onDouble,
   onPlay,
   onCashout,
+  onCancel,
   onDestroyExploded,
   onResetGame,
   phase,
   isProcessing,
   needsCreate,
   playerBalance,
+  safeRevealed,
 }: BetControlsProps) {
   const account = useCurrentAccount()
   const isConnected = !!account
@@ -97,9 +101,16 @@ export default function BetControls({
       )}
 
       {phase === 'playing' && (
-        <button onClick={onCashout} disabled={isProcessing} className="btn-cashout flex-shrink-0 min-w-[100px]">
-          {isProcessing ? <Spinner /> : 'Cashout'}
-        </button>
+        safeRevealed === 0
+          ? (
+            <button onClick={onCancel} disabled={isProcessing} className="btn-secondary flex-shrink-0 min-w-[100px]">
+              {isProcessing ? <Spinner /> : '取消'}
+            </button>
+          ) : (
+            <button onClick={onCashout} disabled={isProcessing} className="btn-cashout flex-shrink-0 min-w-[100px]">
+              {isProcessing ? <Spinner /> : 'Cashout'}
+            </button>
+          )
       )}
 
       {phase === 'exploded' && (
