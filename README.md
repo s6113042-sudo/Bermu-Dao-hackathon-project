@@ -11,7 +11,6 @@
 - **Session Key 架構** — 交易由臨時 Session Key 簽署，點擊即玩，無須每步彈出錢包確認
 - **可驗公平性** — 每次翻牌的交易 Digest 均記錄在鏈上，可自行驗證
 - **抽獎系統** — 每次翻牌自動獲得抽獎票，每 20 分鐘自動開獎
-- **5% 莊家優勢** — 透明公開，由合約強制執行
 
 ---
 
@@ -54,7 +53,7 @@
 - `NFTExample` — NFT 開發實作
 - `workshop0 / workshop1` — Sui Move 開發入門課程
 
-本遊戲合約（`mines.move`）即以工作坊所教授的 Move 開發模式為基礎，串接 Sui 官方 Framework 完成鏈上遊戲邏輯。
+本遊戲合約（`mines.move`）即以 Workshop 的 Move 語言為基礎，串接 Sui 官方 Framework 完成鏈上遊戲邏輯。
 
 ---
 
