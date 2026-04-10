@@ -8,3 +8,6 @@ version = "0.0.1"
 [addresses]
 gamefi = "0x0"
 
+[environments]
+devnet = "609cb156"
+
