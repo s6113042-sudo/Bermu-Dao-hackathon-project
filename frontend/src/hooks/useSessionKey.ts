@@ -89,6 +89,7 @@ export function useSessionKey(): UseSessionKeyResult {
   const fundSession = async (amountMist: bigint): Promise<string> => {
     if (!account) throw new Error('請先連接錢包')
     const tx = new Transaction()
+    tx.setGasBudget(10_000_000) // 明確設定 gas budget，讓錢包選夠大的 coin
     const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)])
     tx.transferObjects([coin], tx.pure.address(sessionAddress))
     const { digest } = await walletSignAndExecute({ transaction: tx })
