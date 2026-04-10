@@ -7,9 +7,9 @@ chain-id = "609cb156"
 
 [[published]]
 source = { local = '\\?\C:\Users\user\Desktop\sui gamefi\test2' }
-published-at = "0x59675e77b17319852b0a13e35003b4cfebcbb24d1245cae6ebccf7b2755e6500"
-original-id = "0x59675e77b17319852b0a13e35003b4cfebcbb24d1245cae6ebccf7b2755e6500"
+published-at = "0xaa1718d089bc9bdb3acbcaf534790b6502701b21068bf802ae457d8781af4c8b"
+original-id = "0xaa1718d089bc9bdb3acbcaf534790b6502701b21068bf802ae457d8781af4c8b"
 version = 1
 toolchain-version = "1.69.1"
 build-config = { flavor = "sui", edition = "2024" }
-upgrade-capability = "0x5c9139d5348259622e0a3fa44a2b4cc656e5ca4f14f27185effbf2eab31a4ca8"
+upgrade-capability = "0xda21d08c41be40745fd4f1f0993e668fea44fd6084a0613665f3c6bd665f9584"

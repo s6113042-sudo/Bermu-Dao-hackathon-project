@@ -21,7 +21,10 @@ module gamefi::mines {
     use sui::coin::{Self, Coin};
     use sui::sui::SUI;
     use sui::random::{Self, Random};
+    use sui::clock::Clock;
     use sui::event;
+    use gamefi::usdc::USDC;
+    use gamefi::lottery::{Self, LotterySystem};
 
     // === 常數 ===
 
@@ -35,17 +38,24 @@ module gamefi::mines {
     /// 倍數精度：MULTIPLIER_SCALE 代表 1.0x
     const MULTIPLIER_SCALE: u64 = 1_000_000_000;
 
-    /// 理論最大倍數（無莊家優勢，全部安全格揭完）
-    /// = C(16,5) = 4368x
-    /// 最大淨賠付 = bet * (4368 - 1) = bet * 4367
-    const MAX_MULTIPLIER: u64 = 4368;
+    /// 含每步 5% 莊家優勢後的實際最大倍數
+    /// = C(16,5) × 0.95^11 = 4368 × 0.95^11 ≈ 2484.7，向上取整保守預留
+    /// 用於 reserved_amount 計算，確保金庫始終能支付最大可能賠付
+    const MAX_MULTIPLIER_WITH_EDGE: u64 = 2485;
 
     /// 莊家優勢上限：1000 bps = 10%
     const MAX_HOUSE_EDGE_BPS: u64 = 1000;
 
+    /// 獎池抽成比例：莊家利潤的 5% 注入抽獎獎池
+    const PRIZE_POOL_BPS: u64 = 500; // 500 / 10000 = 5%
+
     /// 單局最大賠付預設值：50 SUI
     /// 玩家單局能贏取的上限，防止大額幸運連勝清空金庫
     const DEFAULT_MAX_SINGLE_PAYOUT: u64 = 50_000_000_000;
+
+    /// USDC 單局最大賠付預設值：200 USDC（6 位小數）
+    /// 與 SUI 分開設定，避免兩種幣種精度差異導致預留金額膨脹
+    const DEFAULT_MAX_SINGLE_PAYOUT_USDC: u64 = 200_000_000;
 
     /// 超時 epoch 數：超過此值的進行中遊戲可被強制結算
     /// Sui 每個 epoch ≈ 24 小時，7 epochs ≈ 7 天
@@ -76,22 +86,27 @@ module gamefi::mines {
     // === 結構體 ===
 
     /// 遊戲平台（共享對象）
-    /// 持有金庫資金、準備金追蹤、及平台配置
+    /// 持有 SUI 與 USDC 金庫、準備金追蹤、及平台配置
     public struct GamePlatform has key {
         id: UID,
-        /// 平台金庫，用於支付玩家獲勝賠付
+        /// SUI 金庫，用於支付玩家獲勝賠付
         treasury: Balance<SUI>,
-        /// 當前所有進行中遊戲的已預留淨賠付總和
+        /// SUI 遊戲進行中的已預留淨賠付總和
         reserved: u64,
+        /// USDC 金庫
+        usdc_treasury: Balance<USDC>,
+        /// USDC 遊戲進行中的已預留淨賠付總和
+        usdc_reserved: u64,
         /// 莊家優勢（basis points，例如 300 = 3%）
         house_edge_bps: u64,
-        /// 最低押注（MIST 單位，1 SUI = 1_000_000_000 MIST）
+        /// 最低押注（SUI: MIST 單位；USDC: 微 USDC 單位）
         min_bet: u64,
-        /// 最高押注（MIST 單位）
+        /// 最高押注
         max_bet: u64,
-        /// 單局最大賠付上限（含押注本金）
-        /// 防止單一幸運玩家連勝清空金庫
+        /// SUI 單局最大賠付上限（含押注本金，單位 MIST）
         max_single_payout: u64,
+        /// USDC 單局最大賠付上限（含押注本金，單位 raw USDC = 10^-6）
+        max_single_payout_usdc: u64,
         /// 管理員地址
         admin: address,
         /// 是否暫停
@@ -103,14 +118,19 @@ module gamefi::mines {
         id: UID,
     }
 
-    /// 玩家存款餘額（玩家擁有對象）
-    /// 玩家預先存入 SUI，之後遊玩不需每次轉帳授權
+    /// 玩家 SUI 存款餘額（玩家擁有對象）
     public struct PlayerBalance has key {
         id: UID,
         balance: Balance<SUI>,
     }
 
-    /// 單局遊戲會話（玩家擁有對象）
+    /// 玩家 USDC 存款餘額（玩家擁有對象）
+    public struct PlayerBalanceUSDC has key {
+        id: UID,
+        balance: Balance<USDC>,
+    }
+
+    /// 單局 SUI 遊戲會話（玩家擁有對象）
     public struct GameSession has key {
         id: UID,
         /// 玩家地址
@@ -138,6 +158,23 @@ module gamefi::mines {
         /// 開局時從金庫預留的淨賠付金額
         /// 存儲此值確保 cashout/expire 釋放的金額與預留時完全一致，
         /// 不受後續 max_single_payout 參數變更影響
+        reserved_amount: u64,
+    }
+
+    /// 單局 USDC 遊戲會話（玩家擁有對象）
+    public struct GameSessionUSDC has key {
+        id: UID,
+        player: address,
+        bet_amount: u64,
+        bet_balance: Balance<USDC>,
+        tiles_remaining: u64,
+        bombs_remaining: u64,
+        safe_remaining: u64,
+        safe_revealed: u64,
+        revealed_mask: u64,
+        current_multiplier: u64,
+        status: u8,
+        start_epoch: u64,
         reserved_amount: u64,
     }
 
@@ -199,10 +236,13 @@ module gamefi::mines {
             id: object::new(ctx),
             treasury: balance::zero(),
             reserved: 0,
+            usdc_treasury: balance::zero(),
+            usdc_reserved: 0,
             house_edge_bps: 500,                       // 預設 5% 莊家優勢
-            min_bet: 1_000_000,                        // 最低 0.001 SUI
-            max_bet: 10_000_000_000,                   // 最高 10 SUI
-            max_single_payout: DEFAULT_MAX_SINGLE_PAYOUT, // 最高單局賠付 50 SUI
+            min_bet: 1_000_000,                        // SUI: 0.001 SUI；USDC: 1 USDC (1_000_000)
+            max_bet: 10_000_000_000,                   // SUI: 10 SUI；USDC 需另外設定
+            max_single_payout: DEFAULT_MAX_SINGLE_PAYOUT,
+            max_single_payout_usdc: DEFAULT_MAX_SINGLE_PAYOUT_USDC,
             admin: ctx.sender(),
             paused: false,
         };
@@ -253,6 +293,69 @@ module gamefi::mines {
         coin::from_balance(withdrawn, ctx)
     }
 
+    // === USDC 玩家餘額管理 ===
+
+    /// 為呼叫者建立 USDC 存款帳戶
+    public fun create_player_balance_usdc(ctx: &mut TxContext) {
+        let pb = PlayerBalanceUSDC {
+            id: object::new(ctx),
+            balance: balance::zero(),
+        };
+        transfer::transfer(pb, ctx.sender());
+    }
+
+    /// 存入 USDC 到玩家帳戶
+    public fun deposit_usdc(
+        player_balance: &mut PlayerBalanceUSDC,
+        payment: Coin<USDC>,
+    ) {
+        balance::join(&mut player_balance.balance, coin::into_balance(payment));
+    }
+
+    /// 從玩家帳戶提取指定 USDC 金額
+    public fun withdraw_usdc(
+        player_balance: &mut PlayerBalanceUSDC,
+        amount: u64,
+        ctx: &mut TxContext,
+    ): Coin<USDC> {
+        assert!(balance::value(&player_balance.balance) >= amount, EInsufficientBalance);
+        coin::from_balance(balance::split(&mut player_balance.balance, amount), ctx)
+    }
+
+    /// 提取玩家帳戶全部 USDC
+    public fun withdraw_all_usdc(
+        player_balance: &mut PlayerBalanceUSDC,
+        ctx: &mut TxContext,
+    ): Coin<USDC> {
+        let amount = balance::value(&player_balance.balance);
+        assert!(amount > 0, EInsufficientBalance);
+        coin::from_balance(balance::split(&mut player_balance.balance, amount), ctx)
+    }
+
+    /// 將抽獎 SUI 獎金存入玩家帳戶（由 PTB 串接 lottery::claim_prize 呼叫）
+    public fun deposit_prize_sui(
+        player_balance: &mut PlayerBalance,
+        prize: Coin<SUI>,
+    ) {
+        if (coin::value(&prize) > 0) {
+            balance::join(&mut player_balance.balance, coin::into_balance(prize));
+        } else {
+            coin::destroy_zero(prize);
+        }
+    }
+
+    /// 將抽獎 USDC 獎金存入玩家帳戶（由 PTB 串接 lottery::claim_prize 呼叫）
+    public fun deposit_prize_usdc(
+        player_balance: &mut PlayerBalanceUSDC,
+        prize: Coin<USDC>,
+    ) {
+        if (coin::value(&prize) > 0) {
+            balance::join(&mut player_balance.balance, coin::into_balance(prize));
+        } else {
+            coin::destroy_zero(prize);
+        }
+    }
+
     // === 遊戲核心邏輯 ===
 
     /// 開始新的遊戲會話
@@ -273,10 +376,10 @@ module gamefi::mines {
         assert!(balance::value(&player_balance.balance) >= bet_amount, EInsufficientBalance);
 
         // 計算本局實際需預留的淨賠付（取較小值）：
-        //   theoretical = bet * (MAX_MULTIPLIER - 1) = bet * 4367
-        //   capped       = max_single_payout - bet    ← 單局賠付封頂後的最大淨賠
+        //   theoretical = bet * (MAX_MULTIPLIER_WITH_EDGE - 1)  ← 含每步 5% 後的實際最大淨賠
+        //   capped       = max_single_payout - bet               ← 單局賠付封頂後的最大淨賠
         // 取兩者最小，避免為不可能發生的超額賠付鎖住金庫資金
-        let theoretical_net = (bet_amount as u128) * ((MAX_MULTIPLIER - 1) as u128);
+        let theoretical_net = (bet_amount as u128) * ((MAX_MULTIPLIER_WITH_EDGE - 1) as u128);
         let capped_net = (platform.max_single_payout as u128) - (bet_amount as u128);
         let reserved_amount = if (theoretical_net < capped_net) {
             theoretical_net as u64
@@ -340,6 +443,8 @@ module gamefi::mines {
         game: &mut GameSession,
         tile_index: u64,
         rand: &Random,
+        lottery: &mut LotterySystem,
+        clock: &Clock,
         ctx: &mut TxContext,
     ) {
         assert!(game.status == STATUS_ACTIVE, EGameNotActive);
@@ -366,13 +471,25 @@ module gamefi::mines {
             game.bombs_remaining = game.bombs_remaining - 1;
             game.status = STATUS_EXPLODED;
 
-            // 全部押注轉入金庫
-            let bet_amount = balance::value(&game.bet_balance);
-            let lost = balance::split(&mut game.bet_balance, bet_amount);
-            balance::join(&mut platform.treasury, lost);
+            // 5% 押注注入 SUI 獎池，剩餘 95% 進金庫
+            let bet_val = balance::value(&game.bet_balance);
+            let prize_cut = bet_val * PRIZE_POOL_BPS / 10000;
+            if (prize_cut > 0) {
+                let prize_balance = balance::split(&mut game.bet_balance, prize_cut);
+                lottery::add_prize_sui(lottery, prize_balance);
+            };
+            let remaining = balance::value(&game.bet_balance);
+            if (remaining > 0) {
+                let lost = balance::split(&mut game.bet_balance, remaining);
+                balance::join(&mut platform.treasury, lost);
+            };
 
             // 釋放預留資金（使用開局時存儲的精確值，不重新計算）
             platform.reserved = platform.reserved - game.reserved_amount;
+
+            // 發放彩票 NFT 到玩家錢包
+            let ticket = lottery::issue_ticket(lottery, game.player, game.bet_amount, clock, ctx);
+            transfer::public_transfer(ticket, game.player);
 
             event::emit(TileRevealed {
                 game_id: object::id(game),
@@ -394,31 +511,26 @@ module gamefi::mines {
             game.safe_remaining = game.safe_remaining - 1;
             game.safe_revealed = game.safe_revealed + 1;
 
-            // 倍數公式（每步，儲存「公平倍數」，莊家優勢僅於結算時一次性扣除）：
-            //   new_multiplier = old_multiplier × (tiles_before / safe_before)
+            // 倍數公式（每步同時扣除莊家優勢，複利衰減）：
+            //   new_multiplier = old_multiplier × (tiles_before / safe_before) × (1 - house_edge)
             //
-            // 此公式使得：
-            //   multiplier(n) = ∏(tiles_i / safe_i)  = 1 / P(連翻 n 格安全)
-            //
-            // 結算時套用一次 (1 - house_edge)：
-            //   payout = bet × multiplier × (1 - house_edge)
-            //
-            // 效果：無論翻幾格，莊家優勢恆為 5%（非複利累加）
+            // 每翻一格安全格，莊家各抽一次水（house_edge_bps / 10000）
+            // 結算時直接用倍數，無需再額外扣除
             //
             // 以整數運算（u128 避免溢出）：
-            //   new = old * tiles_before / safe_before
+            //   new = old * tiles_before * (10000 - house_edge_bps) / safe_before / 10000
             let new_mult = (game.current_multiplier as u128)
                 * (tiles_before as u128)
-                / (safe_before as u128);
+                * ((10000 - platform.house_edge_bps) as u128)
+                / (safe_before as u128)
+                / 10000u128;
             game.current_multiplier = new_mult as u64;
 
-            // 潛在賠付含一次性莊家優勢折扣：
-            //   potential = bet × multiplier × (10000 - house_edge_bps) / SCALE / 10000
+            // 潛在賠付：倍數已含莊家優勢，直接計算
+            //   potential = bet × multiplier / SCALE
             let potential_payout = (game.bet_amount as u128)
                 * (game.current_multiplier as u128)
-                * ((10000 - platform.house_edge_bps) as u128)
-                / (MULTIPLIER_SCALE as u128)
-                / 10000u128;
+                / (MULTIPLIER_SCALE as u128);
 
             event::emit(TileRevealed {
                 game_id: object::id(game),
@@ -441,6 +553,9 @@ module gamefi::mines {
         platform: &mut GamePlatform,
         game: GameSession,
         player_balance: &mut PlayerBalance,
+        lottery: &mut LotterySystem,
+        clock: &Clock,
+        ctx: &mut TxContext,
     ) {
         assert!(game.status == STATUS_ACTIVE, EGameNotActive);
 
@@ -460,16 +575,13 @@ module gamefi::mines {
             reserved_amount,
         } = game;
 
-        // 計算應付金額：bet × fair_multiplier × (1 - house_edge) / SCALE
-        // 莊家優勢僅此一次扣除，無論玩家翻了幾格，house edge 恆為固定比例
+        // 計算應付金額：倍數已於每步翻格時扣除莊家優勢，直接結算
+        //   payout = bet × multiplier / SCALE
         let raw_payout = ((bet_amount as u128)
             * (current_multiplier as u128)
-            * ((10000 - platform.house_edge_bps) as u128)
-            / (MULTIPLIER_SCALE as u128)
-            / 10000u128) as u64;
+            / (MULTIPLIER_SCALE as u128)) as u64;
 
         // 封頂：單局賠付不超過 max_single_payout
-        // 即使玩家達到極高倍數，金庫最多支付此上限
         let payout = if (raw_payout > platform.max_single_payout) {
             platform.max_single_payout
         } else {
@@ -477,26 +589,36 @@ module gamefi::mines {
         };
 
         if (payout >= bet_amount) {
-            // 正常情況：退回押注 + 從金庫支付利潤
+            // 玩家獲利：退回押注 + 從金庫支付利潤，莊家本局無收益，不注入獎池
             balance::join(&mut player_balance.balance, balance::split(&mut bet_bal, bet_amount));
             balance::destroy_zero(bet_bal);
-
             let profit = payout - bet_amount;
             if (profit > 0) {
                 let winnings = balance::split(&mut platform.treasury, profit);
                 balance::join(&mut player_balance.balance, winnings);
             };
         } else {
-            // 邊緣情況：倍數 < 1.0x（極高莊家優勢時）
-            // 玩家獲得 payout，剩餘押注進入金庫
+            // 莊家獲利：玩家得 payout，剩餘分配 5% 進 SUI 獎池、95% 進金庫
             balance::join(&mut player_balance.balance, balance::split(&mut bet_bal, payout));
-            let to_treasury = balance::split(&mut bet_bal, bet_amount - payout);
-            balance::join(&mut platform.treasury, to_treasury);
+            let house_profit = bet_amount - payout;
+            let prize_cut = house_profit * PRIZE_POOL_BPS / 10000;
+            if (prize_cut > 0) {
+                let prize_balance = balance::split(&mut bet_bal, prize_cut);
+                lottery::add_prize_sui(lottery, prize_balance);
+            };
+            let remaining = balance::value(&bet_bal);
+            if (remaining > 0) {
+                balance::join(&mut platform.treasury, balance::split(&mut bet_bal, remaining));
+            };
             balance::destroy_zero(bet_bal);
         };
 
         // 釋放預留資金（使用開局時存儲的精確值）
         platform.reserved = platform.reserved - reserved_amount;
+
+        // 發放彩票 NFT（每局完成皆發，無論輸贏）
+        let ticket = lottery::issue_ticket(lottery, player, bet_amount, clock, ctx);
+        transfer::public_transfer(ticket, player);
 
         let game_id = object::uid_to_inner(&id);
         event::emit(GameCashedOut {
@@ -634,6 +756,342 @@ module gamefi::mines {
         object::delete(id);
     }
 
+    // === USDC 遊戲核心邏輯 ===
+
+    /// 開始新的 USDC 遊戲會話
+    public fun start_game_usdc(
+        platform: &mut GamePlatform,
+        player_balance: &mut PlayerBalanceUSDC,
+        bet_amount: u64,
+        ctx: &mut TxContext,
+    ): GameSessionUSDC {
+        assert!(!platform.paused, EPlatformPaused);
+        assert!(bet_amount >= platform.min_bet, EBetTooSmall);
+        assert!(bet_amount <= platform.max_bet, EBetTooLarge);
+        assert!(bet_amount <= platform.max_single_payout_usdc, EBetExceedsSinglePayoutCap);
+        assert!(balance::value(&player_balance.balance) >= bet_amount, EInsufficientBalance);
+
+        let theoretical_net = (bet_amount as u128) * ((MAX_MULTIPLIER_WITH_EDGE - 1) as u128);
+        let capped_net = (platform.max_single_payout_usdc as u128) - (bet_amount as u128);
+        let reserved_amount = if (theoretical_net < capped_net) {
+            theoretical_net as u64
+        } else {
+            capped_net as u64
+        };
+
+        let usdc_available =
+            (balance::value(&platform.usdc_treasury) as u128) - (platform.usdc_reserved as u128);
+        assert!(usdc_available >= (reserved_amount as u128), EInsufficientTreasury);
+
+        platform.usdc_reserved = platform.usdc_reserved + reserved_amount;
+        let bet_balance = balance::split(&mut player_balance.balance, bet_amount);
+
+        let game = GameSessionUSDC {
+            id: object::new(ctx),
+            player: ctx.sender(),
+            bet_amount,
+            bet_balance,
+            tiles_remaining: GRID_SIZE,
+            bombs_remaining: BOMB_COUNT,
+            safe_remaining: SAFE_COUNT,
+            safe_revealed: 0,
+            revealed_mask: 0,
+            current_multiplier: MULTIPLIER_SCALE,
+            status: STATUS_ACTIVE,
+            start_epoch: ctx.epoch(),
+            reserved_amount,
+        };
+
+        event::emit(GameStarted {
+            game_id: object::id(&game),
+            player: ctx.sender(),
+            bet_amount,
+        });
+
+        game
+    }
+
+    /// 將 USDC GameSession 存回呼叫者
+    public fun keep_game_usdc(game: GameSessionUSDC, ctx: &mut TxContext) {
+        transfer::transfer(game, ctx.sender());
+    }
+
+    /// 揭開 USDC 遊戲的一個格子
+    ///
+    /// 邏輯與 SUI 版相同，炸彈爆炸時 5% 注入 USDC 獎池並發彩票
+    entry fun reveal_tile_usdc(
+        platform: &mut GamePlatform,
+        game: &mut GameSessionUSDC,
+        tile_index: u64,
+        rand: &Random,
+        lottery: &mut LotterySystem,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(game.status == STATUS_ACTIVE, EGameNotActive);
+        assert!(tile_index < GRID_SIZE, EInvalidTile);
+        assert!((game.revealed_mask >> (tile_index as u8)) & 1 == 0, ETileAlreadyRevealed);
+        assert!(game.safe_remaining > 0, EAllSafeRevealed);
+
+        game.revealed_mask = game.revealed_mask | (1u64 << (tile_index as u8));
+        let tiles_before = game.tiles_remaining;
+        game.tiles_remaining = game.tiles_remaining - 1;
+
+        let mut gen = random::new_generator(rand, ctx);
+        let roll = random::generate_u64_in_range(&mut gen, 0, tiles_before - 1);
+        let is_bomb = roll < game.bombs_remaining;
+
+        if (is_bomb) {
+            game.bombs_remaining = game.bombs_remaining - 1;
+            game.status = STATUS_EXPLODED;
+
+            // 5% 注入 USDC 獎池，剩餘 95% 進金庫
+            let bet_val = balance::value(&game.bet_balance);
+            let prize_cut = bet_val * PRIZE_POOL_BPS / 10000;
+            if (prize_cut > 0) {
+                let prize_balance = balance::split(&mut game.bet_balance, prize_cut);
+                lottery::add_prize_usdc(lottery, prize_balance);
+            };
+            let remaining = balance::value(&game.bet_balance);
+            if (remaining > 0) {
+                let lost = balance::split(&mut game.bet_balance, remaining);
+                balance::join(&mut platform.usdc_treasury, lost);
+            };
+
+            platform.usdc_reserved = platform.usdc_reserved - game.reserved_amount;
+
+            // 發放彩票
+            let ticket = lottery::issue_ticket(lottery, game.player, game.bet_amount, clock, ctx);
+            transfer::public_transfer(ticket, game.player);
+
+            event::emit(TileRevealed {
+                game_id: object::id(game),
+                player: game.player,
+                tile_index,
+                is_bomb: true,
+                multiplier: 0,
+                potential_payout: 0,
+            });
+            event::emit(GameExploded {
+                game_id: object::id(game),
+                player: game.player,
+                tile_index,
+                bet_lost: game.bet_amount,
+            });
+        } else {
+            let safe_before = game.safe_remaining;
+            game.safe_remaining = game.safe_remaining - 1;
+            game.safe_revealed = game.safe_revealed + 1;
+
+            let new_mult = (game.current_multiplier as u128)
+                * (tiles_before as u128)
+                * ((10000 - platform.house_edge_bps) as u128)
+                / (safe_before as u128)
+                / 10000u128;
+            game.current_multiplier = new_mult as u64;
+
+            let potential_payout = (game.bet_amount as u128)
+                * (game.current_multiplier as u128)
+                / (MULTIPLIER_SCALE as u128);
+
+            event::emit(TileRevealed {
+                game_id: object::id(game),
+                player: game.player,
+                tile_index,
+                is_bomb: false,
+                multiplier: game.current_multiplier,
+                potential_payout: potential_payout as u64,
+            });
+        };
+    }
+
+    /// USDC 收手：按當前倍數結算
+    ///
+    /// 莊家獲利部分 5% 注入 USDC 獎池，每局皆發彩票
+    public fun cashout_usdc(
+        platform: &mut GamePlatform,
+        game: GameSessionUSDC,
+        player_balance: &mut PlayerBalanceUSDC,
+        lottery: &mut LotterySystem,
+        clock: &Clock,
+        ctx: &mut TxContext,
+    ) {
+        assert!(game.status == STATUS_ACTIVE, EGameNotActive);
+
+        let GameSessionUSDC {
+            id,
+            player,
+            bet_amount,
+            bet_balance: mut bet_bal,
+            tiles_remaining: _,
+            bombs_remaining: _,
+            safe_remaining: _,
+            safe_revealed,
+            revealed_mask: _,
+            current_multiplier,
+            status: _,
+            start_epoch: _,
+            reserved_amount,
+        } = game;
+
+        // 倍數已於每步翻格時扣除莊家優勢，直接結算
+        let raw_payout = ((bet_amount as u128)
+            * (current_multiplier as u128)
+            / (MULTIPLIER_SCALE as u128)) as u64;
+
+        // 封頂：使用 USDC 專屬賠付上限（修正：原為 max_single_payout，現改為 max_single_payout_usdc）
+        let payout = if (raw_payout > platform.max_single_payout_usdc) {
+            platform.max_single_payout_usdc
+        } else {
+            raw_payout
+        };
+
+        if (payout >= bet_amount) {
+            // 玩家獲利：退回押注 + 從 USDC 金庫支付利潤，莊家本局無收益，不注入獎池
+            balance::join(&mut player_balance.balance, balance::split(&mut bet_bal, bet_amount));
+            balance::destroy_zero(bet_bal);
+            let profit = payout - bet_amount;
+            if (profit > 0) {
+                let winnings = balance::split(&mut platform.usdc_treasury, profit);
+                balance::join(&mut player_balance.balance, winnings);
+            };
+        } else {
+            // 莊家獲利：玩家得 payout，剩餘 5% 進 USDC 獎池、95% 進金庫
+            balance::join(&mut player_balance.balance, balance::split(&mut bet_bal, payout));
+            let house_profit = bet_amount - payout;
+            let prize_cut = house_profit * PRIZE_POOL_BPS / 10000;
+            if (prize_cut > 0) {
+                let prize_balance = balance::split(&mut bet_bal, prize_cut);
+                lottery::add_prize_usdc(lottery, prize_balance);
+            };
+            let remaining = balance::value(&bet_bal);
+            if (remaining > 0) {
+                balance::join(&mut platform.usdc_treasury, balance::split(&mut bet_bal, remaining));
+            };
+            balance::destroy_zero(bet_bal);
+        };
+
+        platform.usdc_reserved = platform.usdc_reserved - reserved_amount;
+
+        // 發放彩票
+        let ticket = lottery::issue_ticket(lottery, player, bet_amount, clock, ctx);
+        transfer::public_transfer(ticket, player);
+
+        let game_id = object::uid_to_inner(&id);
+        event::emit(GameCashedOut {
+            game_id,
+            player,
+            safe_revealed,
+            payout,
+        });
+
+        object::delete(id);
+    }
+
+    /// 取消尚未翻格的 USDC 遊戲（全額退款）
+    public fun cancel_game_usdc(
+        platform: &mut GamePlatform,
+        game: GameSessionUSDC,
+        player_balance: &mut PlayerBalanceUSDC,
+    ) {
+        assert!(game.status == STATUS_ACTIVE, EGameNotActive);
+        assert!(game.safe_revealed == 0, ECannotCancelAfterReveal);
+
+        let GameSessionUSDC {
+            id,
+            player,
+            bet_amount,
+            bet_balance,
+            tiles_remaining: _,
+            bombs_remaining: _,
+            safe_remaining: _,
+            safe_revealed: _,
+            revealed_mask: _,
+            current_multiplier: _,
+            status: _,
+            start_epoch: _,
+            reserved_amount,
+        } = game;
+
+        balance::join(&mut player_balance.balance, bet_balance);
+        platform.usdc_reserved = platform.usdc_reserved - reserved_amount;
+
+        let game_id = object::uid_to_inner(&id);
+        event::emit(GameCancelled {
+            game_id,
+            player,
+            bet_amount,
+            bet_refunded: bet_amount,
+        });
+
+        object::delete(id);
+    }
+
+    /// 清理已爆炸的 USDC 遊戲會話
+    public fun destroy_exploded_game_usdc(game: GameSessionUSDC) {
+        assert!(game.status == STATUS_EXPLODED, EGameStillActive);
+        let GameSessionUSDC {
+            id,
+            player: _,
+            bet_amount: _,
+            bet_balance,
+            tiles_remaining: _,
+            bombs_remaining: _,
+            safe_remaining: _,
+            safe_revealed: _,
+            revealed_mask: _,
+            current_multiplier: _,
+            status: _,
+            start_epoch: _,
+            reserved_amount: _,
+        } = game;
+        balance::destroy_zero(bet_balance);
+        object::delete(id);
+    }
+
+    /// 強制結算超時的 USDC 遊戲會話
+    public fun force_expire_game_usdc(
+        platform: &mut GamePlatform,
+        game: GameSessionUSDC,
+        ctx: &TxContext,
+    ) {
+        assert!(game.status == STATUS_ACTIVE, EGameNotActive);
+        assert!(
+            ctx.epoch() >= game.start_epoch + SESSION_EXPIRE_EPOCHS,
+            ESessionNotExpired
+        );
+
+        let GameSessionUSDC {
+            id,
+            player,
+            bet_amount: _,
+            bet_balance,
+            tiles_remaining: _,
+            bombs_remaining: _,
+            safe_remaining: _,
+            safe_revealed: _,
+            revealed_mask: _,
+            current_multiplier: _,
+            status: _,
+            start_epoch: _,
+            reserved_amount,
+        } = game;
+
+        let confiscated = balance::value(&bet_balance);
+        balance::join(&mut platform.usdc_treasury, bet_balance);
+        platform.usdc_reserved = platform.usdc_reserved - reserved_amount;
+
+        let game_id = object::uid_to_inner(&id);
+        event::emit(GameExpired {
+            game_id,
+            player,
+            bet_confiscated: confiscated,
+            reserved_released: reserved_amount,
+        });
+
+        object::delete(id);
+    }
+
     // === 管理員功能 ===
 
     /// 注入流動性到平台金庫
@@ -699,6 +1157,38 @@ module gamefi::mines {
     ) {
         assert!(max_single_payout > platform.max_bet, EInvalidPayoutCap);
         platform.max_single_payout = max_single_payout;
+    }
+
+    /// 設定 USDC 單局最大賠付上限
+    /// 必須大於 max_bet，以確保任何合法押注都能開局
+    public fun set_max_single_payout_usdc(
+        _: &AdminCap,
+        platform: &mut GamePlatform,
+        max_single_payout_usdc: u64,
+    ) {
+        assert!(max_single_payout_usdc > platform.max_bet, EInvalidPayoutCap);
+        platform.max_single_payout_usdc = max_single_payout_usdc;
+    }
+
+    /// 注入 USDC 流動性到平台金庫
+    public fun add_liquidity_usdc(
+        _: &AdminCap,
+        platform: &mut GamePlatform,
+        coin: Coin<USDC>,
+    ) {
+        balance::join(&mut platform.usdc_treasury, coin::into_balance(coin));
+    }
+
+    /// 從 USDC 金庫提取未預留資金
+    public fun remove_liquidity_usdc(
+        _: &AdminCap,
+        platform: &mut GamePlatform,
+        amount: u64,
+        ctx: &mut TxContext,
+    ): Coin<USDC> {
+        let available = balance::value(&platform.usdc_treasury) - platform.usdc_reserved;
+        assert!(amount <= available, EInsufficientBalance);
+        coin::from_balance(balance::split(&mut platform.usdc_treasury, amount), ctx)
     }
 
     // === 查詢函數（view） ===
@@ -783,5 +1273,45 @@ module gamefi::mines {
     /// 查詢超時門檻（start_epoch + SESSION_EXPIRE_EPOCHS）
     public fun get_session_expire_epoch(game: &GameSession): u64 {
         game.start_epoch + SESSION_EXPIRE_EPOCHS
+    }
+
+    /// 查詢 USDC 金庫總餘額
+    public fun usdc_treasury_balance(platform: &GamePlatform): u64 {
+        balance::value(&platform.usdc_treasury)
+    }
+
+    /// 查詢 USDC 金庫可用（未預留）餘額
+    public fun usdc_treasury_available(platform: &GamePlatform): u64 {
+        balance::value(&platform.usdc_treasury) - platform.usdc_reserved
+    }
+
+    /// 查詢 USDC 玩家帳戶餘額
+    public fun player_usdc_balance_value(pb: &PlayerBalanceUSDC): u64 {
+        balance::value(&pb.balance)
+    }
+
+    /// 查詢 USDC 遊戲狀態
+    public fun get_usdc_game_status(game: &GameSessionUSDC): u8 {
+        game.status
+    }
+
+    /// 查詢 USDC 遊戲當前倍數
+    public fun get_usdc_multiplier(game: &GameSessionUSDC): u64 {
+        game.current_multiplier
+    }
+
+    /// 計算 USDC 遊戲若此刻收手可獲得的金額
+    public fun get_usdc_potential_payout(game: &GameSessionUSDC): u64 {
+        if (game.status != STATUS_ACTIVE) return 0;
+        ((game.bet_amount as u128)
+            * (game.current_multiplier as u128)
+            * 9500u128
+            / (MULTIPLIER_SCALE as u128)
+            / 10000u128) as u64
+    }
+
+    /// 查詢 USDC 遊戲開局 epoch
+    public fun get_usdc_session_start_epoch(game: &GameSessionUSDC): u64 {
+        game.start_epoch
     }
 }

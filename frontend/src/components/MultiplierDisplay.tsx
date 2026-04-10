@@ -1,26 +1,30 @@
-import { MULTIPLIER_SCALE, MIST_PER_SUI, HOUSE_EDGE_BPS } from '../lib/constants'
+import { MULTIPLIER_SCALE, MIST_PER_SUI, RAW_PER_USDC, HOUSE_EDGE_BPS } from '../lib/constants'
+import { Currency } from '../types/game'
 
 interface MultiplierDisplayProps {
   multiplier: bigint
   betAmount: bigint
   safeRevealed: number
+  currency: Currency
 }
 
 export default function MultiplierDisplay({
   multiplier,
   betAmount,
   safeRevealed,
+  currency,
 }: MultiplierDisplayProps) {
-  // 合約儲存的是「公平倍數」，顯示時套用一次性莊家優勢折扣
-  // displayMultiplier = fairMultiplier × (1 - house_edge)
+  const unit = currency === 'SUI' ? MIST_PER_SUI : RAW_PER_USDC
+  const symbol = currency === 'SUI' ? 'SUI' : 'USDC'
+  const decimals = currency === 'SUI' ? 4 : 2
+
   const fairMult = multiplier > 0n ? Number(multiplier) / Number(MULTIPLIER_SCALE) : 1
   const adjustedMult = fairMult * (1 - HOUSE_EDGE_BPS / 10000)
   const displayMultiplier = adjustedMult.toFixed(4)
 
-  // 計算潛在賠付（MIST → SUI），同樣套用莊家優勢折扣
   const potentialPayout =
     betAmount > 0n && multiplier > 0n
-      ? (Number(betAmount) * adjustedMult) / Number(MIST_PER_SUI)
+      ? (Number(betAmount) * adjustedMult) / Number(unit)
       : 0
 
   return (
@@ -53,9 +57,9 @@ export default function MultiplierDisplay({
       <div className="text-center">
         <p className="text-gray-400 text-xs uppercase tracking-wider mb-1">可獲得</p>
         <p className="text-green-400 font-bold text-2xl">
-          {potentialPayout.toFixed(4)}
+          {potentialPayout.toFixed(decimals)}
         </p>
-        <p className="text-gray-500 text-xs">SUI</p>
+        <p className="text-gray-500 text-xs">{symbol}</p>
       </div>
     </div>
   )

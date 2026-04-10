@@ -137,7 +137,10 @@ function HistoryTab({ games }: { games: GameHistory[] }) {
         const isExpanded = expandedId === game.id
         const date = new Date(game.timestamp)
         const timeStr = `${date.getMonth() + 1}/${date.getDate()} ${date.getHours().toString().padStart(2, '0')}:${date.getMinutes().toString().padStart(2, '0')}`
-        const betSui = (parseInt(game.betAmount) / 1_000_000_000).toFixed(3)
+        const isSUI = !game.currency || game.currency === 'SUI'
+        const betDisplay = isSUI
+          ? (parseInt(game.betAmount) / 1_000_000_000).toFixed(3) + ' SUI'
+          : (parseInt(game.betAmount) / 1_000_000).toFixed(2) + ' USDC'
         const resultColor = game.phase === 'cashed_out' ? 'text-green-400' : 'text-red-400'
         const resultLabel = game.phase === 'cashed_out' ? '收手' : '爆炸'
 
@@ -156,7 +159,7 @@ function HistoryTab({ games }: { games: GameHistory[] }) {
               <div className="flex items-center gap-3">
                 <span className="text-gray-500 text-xs w-5">#{idx + 1}</span>
                 <span className={`text-xs font-medium ${resultColor}`}>{resultLabel}</span>
-                <span className="text-gray-300 text-xs">{betSui} SUI</span>
+                <span className="text-gray-300 text-xs">{betDisplay}</span>
               </div>
               <div className="flex items-center gap-2">
                 <span className="text-gray-500 text-xs">{timeStr}</span>

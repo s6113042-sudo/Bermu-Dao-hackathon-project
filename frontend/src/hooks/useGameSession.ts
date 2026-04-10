@@ -1,20 +1,20 @@
 /**
  * useGameSession
  *
- * 管理單局遊戲的完整生命週期。
- * 所有操作均由 session key 靜默執行，無需錢包彈窗。
- *
- * 歷史記錄：遊戲結束後自動儲存至 localStorage，最多保留 5 場。
+ * 管理單局遊戲的完整生命週期，支援 SUI 和 USDC 雙幣種。
+ * reveal_tile 和 cashout 現在需要傳入 LotterySystem 和 Clock。
  */
 
 import { useState } from 'react'
 import { Transaction } from '@mysten/sui/transactions'
-import { GameState, TileState, GameHistory } from '../types/game'
+import { GameState, TileState, GameHistory, Currency } from '../types/game'
 import {
   PACKAGE_ID,
   MODULE_NAME,
   GAME_PLATFORM_ID,
   RANDOM_OBJECT_ID,
+  CLOCK_OBJECT_ID,
+  LOTTERY_SYSTEM_ID,
   GRID_SIZE,
 } from '../lib/constants'
 import { UseSessionKeyResult } from './useSessionKey'
@@ -30,13 +30,12 @@ const initialState: GameState = {
   sessionId: null,
   phase: 'idle',
   betAmount: 0n,
+  currency: 'SUI',
   tiles: initialTiles(),
   currentMultiplier: 1_000_000_000n,
   safeRevealed: 0,
   revealDigests: [],
 }
-
-// ── localStorage helpers ──
 
 function loadHistory(): GameHistory[] {
   try {
@@ -51,9 +50,7 @@ function loadHistory(): GameHistory[] {
 function saveHistory(history: GameHistory[]) {
   try {
     localStorage.setItem(HISTORY_STORAGE_KEY, JSON.stringify(history))
-  } catch {
-    // 靜默失敗（私密瀏覽模式可能拒絕寫入）
-  }
+  } catch {}
 }
 
 function appendHistory(entry: GameHistory): GameHistory[] {
@@ -68,7 +65,7 @@ export interface UseGameSessionResult {
   isProcessing: boolean
   error: string | null
   gameHistory: GameHistory[]
-  startGame: (betAmountMist: bigint, playerBalanceId: string) => Promise<void>
+  startGame: (betAmount: bigint, playerBalanceId: string, currency: Currency) => Promise<void>
   revealTile: (index: number) => Promise<void>
   cashout: (playerBalanceId: string) => Promise<void>
   cancelGame: (playerBalanceId: string) => Promise<void>
@@ -82,32 +79,33 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [gameHistory, setGameHistory] = useState<GameHistory[]>(() => loadHistory())
-
-  // 開局時記錄時間戳，用於歷史記錄 id
   const [gameStartTime, setGameStartTime] = useState<number>(0)
 
-  // ── 開始新遊戲（session key，無彈窗）──
-  const startGame = async (betAmountMist: bigint, playerBalanceId: string) => {
+  // ── 開始新遊戲 ──
+  const startGame = async (betAmount: bigint, playerBalanceId: string, currency: Currency) => {
     setIsProcessing(true)
     setError(null)
     try {
       const tx = new Transaction()
+      const isSUI = currency === 'SUI'
+      const startFn = isSUI ? 'start_game' : 'start_game_usdc'
+      const keepFn = isSUI ? 'keep_game' : 'keep_game_usdc'
+
       const [gameSession] = tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::start_game`,
+        target: `${PACKAGE_ID}::${MODULE_NAME}::${startFn}`,
         arguments: [
           tx.object(GAME_PLATFORM_ID),
           tx.object(playerBalanceId),
-          tx.pure.u64(betAmountMist),
+          tx.pure.u64(betAmount),
         ],
       })
       tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::keep_game`,
+        target: `${PACKAGE_ID}::${MODULE_NAME}::${keepFn}`,
         arguments: [gameSession],
       })
 
       const { effects } = await executeWithSession(tx)
 
-      // 從 effects.created 找 GameSession 對象 ID
       const created = effects?.created ?? []
       const sessionObj = created.find(
         (obj: any) =>
@@ -124,7 +122,8 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
         ...initialState,
         sessionId,
         phase: 'playing',
-        betAmount: betAmountMist,
+        betAmount,
+        currency,
         tiles: initialTiles(),
       })
     } catch (e: any) {
@@ -134,20 +133,25 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
     }
   }
 
-  // ── 揭開格子（session key，無彈窗）──
+  // ── 揭開格子（含 lottery + clock） ──
   const revealTile = async (index: number) => {
     if (gameState.phase !== 'playing' || isProcessing || !gameState.sessionId) return
     setIsProcessing(true)
     setError(null)
     try {
       const tx = new Transaction()
+      const isSUI = gameState.currency === 'SUI'
+      const revealFn = isSUI ? 'reveal_tile' : 'reveal_tile_usdc'
+
       tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::reveal_tile`,
+        target: `${PACKAGE_ID}::${MODULE_NAME}::${revealFn}`,
         arguments: [
           tx.object(GAME_PLATFORM_ID),
           tx.object(gameState.sessionId),
           tx.pure.u64(index),
           tx.object(RANDOM_OBJECT_ID),
+          tx.object(LOTTERY_SYSTEM_ID),
+          tx.object(CLOCK_OBJECT_ID),
         ],
       })
 
@@ -166,25 +170,17 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
           const newTiles = [...prev.tiles]
           newTiles[index] = 'bomb'
           const newDigests = [...prev.revealDigests, digest]
-
-          // 儲存爆炸記錄到歷史
           const entry: GameHistory = {
             id: gameStartTime,
             phase: 'exploded',
             digests: newDigests,
             betAmount: prev.betAmount.toString(),
+            currency: prev.currency,
             timestamp: Date.now(),
           }
           const updated = appendHistory(entry)
           setGameHistory(updated)
-
-          return {
-            ...prev,
-            tiles: newTiles,
-            phase: 'exploded',
-            currentMultiplier: 0n,
-            revealDigests: newDigests,
-          }
+          return { ...prev, tiles: newTiles, phase: 'exploded', currentMultiplier: 0n, revealDigests: newDigests }
         })
       } else {
         setGameState((prev) => {
@@ -207,35 +203,39 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
     }
   }
 
-  // ── 收手（session key，無彈窗）──
+  // ── 收手（含 lottery + clock） ──
   const cashout = async (playerBalanceId: string) => {
     if (gameState.phase !== 'playing' || isProcessing || !gameState.sessionId) return
     setIsProcessing(true)
     setError(null)
     try {
       const tx = new Transaction()
+      const isSUI = gameState.currency === 'SUI'
+      const cashoutFn = isSUI ? 'cashout' : 'cashout_usdc'
+
       tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::cashout`,
+        target: `${PACKAGE_ID}::${MODULE_NAME}::${cashoutFn}`,
         arguments: [
           tx.object(GAME_PLATFORM_ID),
           tx.object(gameState.sessionId),
           tx.object(playerBalanceId),
+          tx.object(LOTTERY_SYSTEM_ID),
+          tx.object(CLOCK_OBJECT_ID),
         ],
       })
       await executeWithSession(tx)
 
       setGameState((prev) => {
-        // 儲存收手記錄到歷史
         const entry: GameHistory = {
           id: gameStartTime,
           phase: 'cashed_out',
           digests: prev.revealDigests,
           betAmount: prev.betAmount.toString(),
+          currency: prev.currency,
           timestamp: Date.now(),
         }
         const updated = appendHistory(entry)
         setGameHistory(updated)
-
         return { ...prev, phase: 'cashed_out' }
       })
     } catch (e: any) {
@@ -245,7 +245,47 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
     }
   }
 
-  // ── 清理爆炸遊戲（session key，無彈窗）──
+  // ── 取消遊戲（0 次翻格） ──
+  const cancelGame = async (playerBalanceId: string) => {
+    if (gameState.phase !== 'playing' || isProcessing || !gameState.sessionId) return
+    setIsProcessing(true)
+    setError(null)
+    try {
+      const tx = new Transaction()
+      const isSUI = gameState.currency === 'SUI'
+      const cancelFn = isSUI ? 'cancel_game' : 'cancel_game_usdc'
+
+      tx.moveCall({
+        target: `${PACKAGE_ID}::${MODULE_NAME}::${cancelFn}`,
+        arguments: [
+          tx.object(GAME_PLATFORM_ID),
+          tx.object(gameState.sessionId),
+          tx.object(playerBalanceId),
+        ],
+      })
+      await executeWithSession(tx)
+
+      setGameState((prev) => {
+        const entry: GameHistory = {
+          id: gameStartTime,
+          phase: 'cashed_out',
+          digests: prev.revealDigests,
+          betAmount: prev.betAmount.toString(),
+          currency: prev.currency,
+          timestamp: Date.now(),
+        }
+        const updated = appendHistory(entry)
+        setGameHistory(updated)
+        return { ...prev, phase: 'cashed_out' }
+      })
+    } catch (e: any) {
+      setError(parseError(e))
+    } finally {
+      setIsProcessing(false)
+    }
+  }
+
+  // ── 清理爆炸遊戲 ──
   const destroyExploded = async () => {
     if (!gameState.sessionId) {
       setGameState(initialState)
@@ -255,8 +295,11 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
     setError(null)
     try {
       const tx = new Transaction()
+      const isSUI = gameState.currency === 'SUI'
+      const destroyFn = isSUI ? 'destroy_exploded_game' : 'destroy_exploded_game_usdc'
+
       tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::destroy_exploded_game`,
+        target: `${PACKAGE_ID}::${MODULE_NAME}::${destroyFn}`,
         arguments: [tx.object(gameState.sessionId)],
       })
       await executeWithSession(tx)
@@ -265,42 +308,6 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
     } finally {
       setIsProcessing(false)
       setGameState(initialState)
-    }
-  }
-
-  // ── 取消遊戲（0 次翻格，全額退款）──
-  const cancelGame = async (playerBalanceId: string) => {
-    if (gameState.phase !== 'playing' || isProcessing || !gameState.sessionId) return
-    setIsProcessing(true)
-    setError(null)
-    try {
-      const tx = new Transaction()
-      tx.moveCall({
-        target: `${PACKAGE_ID}::${MODULE_NAME}::cancel_game`,
-        arguments: [
-          tx.object(GAME_PLATFORM_ID),
-          tx.object(gameState.sessionId),
-          tx.object(playerBalanceId),
-        ],
-      })
-      await executeWithSession(tx)
-
-      setGameState((prev) => {
-        const entry: GameHistory = {
-          id: gameStartTime,
-          phase: 'cashed_out',
-          digests: prev.revealDigests,
-          betAmount: prev.betAmount.toString(),
-          timestamp: Date.now(),
-        }
-        const updated = appendHistory(entry)
-        setGameHistory(updated)
-        return { ...prev, phase: 'cashed_out' }
-      })
-    } catch (e: any) {
-      setError(parseError(e))
-    } finally {
-      setIsProcessing(false)
     }
   }
 
@@ -323,10 +330,10 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
   }
 }
 
-/** 解析合約 abort code 為可讀訊息 */
 function parseError(e: any): string {
   const msg: string = e?.message ?? String(e)
-  const match = msg.match(/abort code: (\d+)/)
+  // Handle both "abort code: N" and "MoveAbort(..., N)" dry-run formats
+  const match = msg.match(/abort code: (\d+)/) || msg.match(/MoveAbort\(.*?,\s*(\d+)\)/)
   if (match) {
     const code = parseInt(match[1])
     const codes: Record<number, string> = {

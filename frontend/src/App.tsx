@@ -7,10 +7,13 @@ import MultiplierDisplay from './components/MultiplierDisplay'
 import InfoModal from './components/InfoModal'
 import FairnessModal from './components/FairnessModal'
 import BalanceModal from './components/BalanceModal'
+import LotteryPanel from './components/LotteryPanel'
 import { useSessionKey } from './hooks/useSessionKey'
 import { useGameSession } from './hooks/useGameSession'
 import { usePlayerBalance } from './hooks/usePlayerBalance'
-import { MIST_PER_SUI } from './lib/constants'
+import { useLottery } from './hooks/useLottery'
+import { MIST_PER_SUI, RAW_PER_USDC } from './lib/constants'
+import { Currency } from './types/game'
 
 export default function App() {
   const account = useCurrentAccount()
@@ -18,36 +21,59 @@ export default function App() {
   const [showInfo, setShowInfo] = useState(false)
   const [showFairness, setShowFairness] = useState(false)
   const [showBalance, setShowBalance] = useState(false)
+  const [showLottery, setShowLottery] = useState(false)
 
-  // ── Session Key（所有遊戲操作的靜默簽名者）──
   const session = useSessionKey()
-
-  // ── 遊戲帳戶（PlayerBalance，owned by session address）──
   const playerBalance = usePlayerBalance(session)
-
-  // ── 遊戲狀態 ──
   const game = useGameSession(session)
+  const lottery = useLottery(session)
 
-  // 連接錢包後，若 session 尚無 SUI → 自動開啟充值 Modal
+  // 幣種狀態（idle 時可切換，遊戲中鎖定）
+  const [currency, setCurrency] = useState<Currency>('SUI')
+
+  // 連接錢包後，若 session 無 SUI → 開啟充值
   useEffect(() => {
     if (account && session.sessionSuiBalance === 0n) {
       setShowBalance(true)
     }
   }, [account, session.sessionSuiBalance])
 
-  // 遊戲結束後重新整理遊戲帳戶餘額
+  // 遊戲結束後連續輪詢確保餘額快速同步
   useEffect(() => {
-    if (game.gameState.phase === 'cashed_out' || game.gameState.phase === 'exploded') {
-      playerBalance.refetch()
+    const phase = game.gameState.phase
+    if (phase === 'cashed_out' || phase === 'exploded') {
+      const poll = (fn: () => void) => {
+        fn()
+        const t1 = setTimeout(fn, 1200)
+        const t2 = setTimeout(fn, 3000)
+        return () => { clearTimeout(t1); clearTimeout(t2) }
+      }
+      poll(playerBalance.refetch)
+      poll(playerBalance.refetchUSDC)
+      lottery.refetch()
     }
   }, [game.gameState.phase])
 
+  // 偵測到中獎彩票時自動領獎（含其他人觸發開獎的情況）
+  useEffect(() => {
+    if (!lottery.winningTicket || lottery.isBusy) return
+    const pbId = playerBalance.playerBalanceId
+    if (!pbId) return
+    lottery.claimPrize(
+      lottery.winningTicket.objectId,
+      pbId,
+      playerBalance.playerBalanceUSDCId ?? null,
+    )
+  }, [lottery.winningTicket?.objectId])
+
   // ── 下注金額 ──
   const [betInput, setBetInput] = useState('0.1')
-  const betAmountMist = (() => {
+
+  const betAmountRaw = (() => {
     const val = parseFloat(betInput)
     if (isNaN(val) || val <= 0) return 0n
-    return BigInt(Math.floor(val * Number(MIST_PER_SUI)))
+    const unit = currency === 'SUI' ? MIST_PER_SUI : RAW_PER_USDC
+    return BigInt(Math.floor(val * Number(unit)))
   })()
 
   const handleHalfBet = () => {
@@ -59,39 +85,71 @@ export default function App() {
     if (!isNaN(val)) setBetInput((val * 2).toFixed(4).replace(/\.?0+$/, ''))
   }
 
+  const handleCurrencyChange = (c: Currency) => {
+    if (game.gameState.phase !== 'idle') return
+    setCurrency(c)
+  }
+
   const handlePlay = () => {
-    if (!playerBalance.playerBalanceId) {
+    const pbId = currency === 'SUI'
+      ? playerBalance.playerBalanceId
+      : playerBalance.playerBalanceUSDCId
+
+    if (!pbId) {
       setShowBalance(true)
       return
     }
-    game.startGame(betAmountMist, playerBalance.playerBalanceId)
+    // Pre-check USDC balance before submitting tx
+    if (currency === 'USDC') {
+      const usdcBal = playerBalance.usdcBalance ?? 0n
+      if (usdcBal < betAmountRaw) {
+        setShowBalance(true)
+        return
+      }
+    }
+    // 樂觀扣除押注（開局成功後立即反映，不等 RPC）
+    if (currency === 'SUI') {
+      playerBalance.adjustOptimistic(-betAmountRaw, 0n)
+    } else {
+      playerBalance.adjustOptimistic(0n, -betAmountRaw)
+    }
+    game.startGame(betAmountRaw, pbId, currency)
   }
 
   const handleCashout = () => {
-    if (!playerBalance.playerBalanceId) return
-    game.cashout(playerBalance.playerBalanceId)
+    const pbId = game.gameState.currency === 'SUI'
+      ? playerBalance.playerBalanceId
+      : playerBalance.playerBalanceUSDCId
+    if (!pbId) return
+    game.cashout(pbId)
   }
 
   const handleCancel = () => {
-    if (!playerBalance.playerBalanceId) return
-    game.cancelGame(playerBalance.playerBalanceId)
+    const pbId = game.gameState.currency === 'SUI'
+      ? playerBalance.playerBalanceId
+      : playerBalance.playerBalanceUSDCId
+    if (!pbId) return
+    game.cancelGame(pbId)
   }
 
-  // 再玩一局：直接用相同押注金額開始下一局，不需要再按 Play
   const handleRestart = () => {
-    if (!playerBalance.playerBalanceId) {
-      setShowBalance(true)
-      return
-    }
-    game.startGame(betAmountMist, playerBalance.playerBalanceId)
+    game.resetGame()
   }
+
+  // 遊戲中使用的幣種（從 gameState 取，避免切換後不一致）
+  const activeCurrency = game.gameState.phase !== 'idle'
+    ? game.gameState.currency
+    : currency
 
   return (
     <div className="min-h-screen bg-navy-900 flex flex-col">
       <Navbar
-        balance={playerBalance.balance}
-        balanceLoading={playerBalance.isLoading}
+        suiBalance={playerBalance.balance}
+        usdcBalance={playerBalance.usdcBalance}
+        balanceLoading={playerBalance.isLoading || playerBalance.usdcLoading}
         onBalanceClick={() => account && setShowBalance(true)}
+        lottery={lottery}
+        onLotteryClick={() => setShowLottery(true)}
       />
 
       <main className="flex-1 flex flex-col items-center px-4 py-6">
@@ -114,6 +172,7 @@ export default function App() {
               multiplier={game.gameState.currentMultiplier}
               betAmount={game.gameState.betAmount}
               safeRevealed={game.gameState.safeRevealed}
+              currency={activeCurrency}
             />
           </div>
         )}
@@ -153,6 +212,10 @@ export default function App() {
             needsCreate={playerBalance.needsCreate}
             playerBalance={playerBalance.balance}
             safeRevealed={game.gameState.safeRevealed}
+            currency={activeCurrency}
+            onCurrencyChange={handleCurrencyChange}
+            usdcBalance={playerBalance.usdcBalance}
+            needsCreateUSDC={playerBalance.needsCreateUSDC}
           />
         </div>
       </main>
@@ -171,6 +234,35 @@ export default function App() {
           playerBalance={playerBalance}
           onClose={() => setShowBalance(false)}
         />
+      )}
+      {showLottery && (
+        <div
+          className="fixed inset-0 z-50"
+          onClick={() => setShowLottery(false)}
+        >
+          <div
+            className="absolute right-4 w-96"
+            style={{ top: '60px' }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            {/* 小三角箭頭 */}
+            <div className="flex justify-end pr-6">
+              <div style={{
+                width: 0, height: 0,
+                borderLeft: '8px solid transparent',
+                borderRight: '8px solid transparent',
+                borderBottom: '8px solid rgba(139,92,246,0.5)',
+              }} />
+            </div>
+            <LotteryPanel
+              lottery={lottery}
+              isWalletConnected={!!account}
+              onClose={() => setShowLottery(false)}
+              playerBalanceId={playerBalance.playerBalanceId}
+              playerBalanceUSDCId={playerBalance.playerBalanceUSDCId}
+            />
+          </div>
+        </div>
       )}
     </div>
   )
