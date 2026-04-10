@@ -107,13 +107,13 @@ export default function App() {
         return
       }
     }
-    // 樂觀扣除押注（開局成功後立即反映，不等 RPC）
-    if (currency === 'SUI') {
-      playerBalance.adjustOptimistic(-betAmountRaw, 0n)
-    } else {
-      playerBalance.adjustOptimistic(0n, -betAmountRaw)
-    }
-    game.startGame(betAmountRaw, pbId, currency)
+    // 樂觀扣除押注，startGame 失敗時自動回滾
+    const suiDelta = currency === 'SUI' ? -betAmountRaw : 0n
+    const usdcDelta = currency === 'USDC' ? -betAmountRaw : 0n
+    playerBalance.adjustOptimistic(suiDelta, usdcDelta)
+    game.startGame(betAmountRaw, pbId, currency).catch(() => {
+      playerBalance.adjustOptimistic(-suiDelta, -usdcDelta)
+    })
   }
 
   const handleCashout = () => {

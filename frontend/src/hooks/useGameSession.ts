@@ -128,6 +128,7 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
       })
     } catch (e: any) {
       setError(parseError(e))
+      throw e
     } finally {
       setIsProcessing(false)
     }

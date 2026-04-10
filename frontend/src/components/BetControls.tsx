@@ -44,6 +44,7 @@ export default function BetControls({
   const betValue = parseFloat(betInput)
   const betRaw = isNaN(betValue) ? 0n : BigInt(Math.floor(betValue * Number(unit)))
   const isValidBet = !isNaN(betValue) && betValue >= minBet && betValue <= maxBet
+  const exceedsMax = !isNaN(betValue) && betValue > maxBet
   const insufficientBalance = isConnected && !needsCreateCurrent && currentBalance !== null && betRaw > currentBalance
 
   const inputDisabled = phase === 'playing' || isProcessing
@@ -51,6 +52,7 @@ export default function BetControls({
   const playLabel = (() => {
     if (!isConnected) return '連接錢包'
     if (needsCreateCurrent) return '建立帳戶'
+    if (exceedsMax) return `上限 ${maxBet} ${isSUI ? 'SUI' : 'USDC'}`
     if (insufficientBalance) return '餘額不足'
     return 'Play'
   })()
@@ -80,6 +82,20 @@ export default function BetControls({
               {c}
             </button>
           ))}
+        </div>
+      )}
+
+      {/* ── 上限提示 ── */}
+      {phase === 'idle' && (
+        <div className="flex items-center justify-between text-xs px-0.5">
+          <span className="text-gray-500">
+            單注範圍：{isSUI ? `${MIN_BET_SUI} – ${MAX_BET_SUI} SUI` : `${MIN_BET_USDC} – ${MAX_BET_USDC} USDC`}
+          </span>
+          {exceedsMax && (
+            <span style={{ color: '#f87171' }}>
+              ⚠ 超過單注上限 {maxBet} {isSUI ? 'SUI' : 'USDC'}
+            </span>
+          )}
         </div>
       )}
 
