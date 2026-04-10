@@ -5,7 +5,7 @@
  * USDC 在 devnet 使用公開 TreasuryCap 水龍頭鑄造，session key 靜默執行。
  */
 
-import { useSuiClientQuery } from '@mysten/dapp-kit'
+import { useSuiClientQuery, useSuiClient } from '@mysten/dapp-kit'
 import { useState, useEffect, useRef } from 'react'
 import { Transaction } from '@mysten/sui/transactions'
 import { PACKAGE_ID, MODULE_NAME, USDC_TREASURY_CAP_ID, USDC_COIN_TYPE } from '../lib/constants'
@@ -57,6 +57,7 @@ function parseBalance(raw: unknown): bigint {
 
 export function usePlayerBalance(session: UseSessionKeyResult): UsePlayerBalanceResult {
   const { sessionAddress, executeWithSession } = session
+  const suiClient = useSuiClient()
 
   // ── 樂觀餘額 delta（交易送出後立即調整，RPC 同步後歸零） ──
   const [suiDelta, setSuiDelta] = useState(0n)
@@ -164,7 +165,20 @@ export function usePlayerBalance(session: UseSessionKeyResult): UsePlayerBalance
   const deposit = async (amountMist: bigint, explicitPbId?: string) => {
     const pbId = explicitPbId ?? playerBalanceId
     if (!pbId) throw new Error('PlayerBalance 尚未建立')
+
+    // 先查 session 持有的所有 SUI coin，merge 後再 split
+    // 避免「gas coin 只有新收到的 amountMist，split 後無法付手續費」
+    const { data: coins } = await suiClient.getCoins({
+      owner: sessionAddress,
+      coinType: '0x2::sui::SUI',
+    })
     const tx = new Transaction()
+    if (coins.length > 1) {
+      tx.mergeCoins(
+        tx.gas,
+        coins.slice(1).map((c) => tx.object(c.coinObjectId)),
+      )
+    }
     const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)])
     tx.moveCall({
       target: `${PACKAGE_ID}::${MODULE_NAME}::deposit`,

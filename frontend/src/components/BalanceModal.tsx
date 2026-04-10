@@ -12,8 +12,8 @@ import { UseSessionKeyResult } from '../hooks/useSessionKey'
 import { UsePlayerBalanceResult } from '../hooks/usePlayerBalance'
 import UsdcIcon from './UsdcIcon'
 
-const GAS_THRESHOLD = 5_000_000n
-const GAS_RESERVE = 50_000_000n
+const GAS_THRESHOLD = 50_000_000n
+const GAS_RESERVE = 200_000_000n
 
 type BalanceCurrency = 'SUI' | 'USDC'
 
@@ -60,7 +60,7 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
       if (currency === 'SUI') {
         const minRequired = needsGasTopup ? GAS_RESERVE + 1_000_000n : 1_000_000n
         if (amountRaw < minRequired) {
-          setMsg({ type: 'err', text: needsGasTopup ? '首次充值最少 0.06 SUI（含 0.05 Gas）' : '最少充值 0.001 SUI' })
+          setMsg({ type: 'err', text: needsGasTopup ? '首次充值最少 0.21 SUI（含 0.2 Gas）' : '最少充值 0.001 SUI' })
           setBusy(false)
           return
         }
@@ -230,7 +230,7 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
                 <p className="text-xs text-gray-500 text-center">充值後所有遊戲操作無需再次授權</p>
                 {needsGasTopup && (
                   <p className="text-xs text-center" style={{ color: '#a78bfa' }}>
-                    ⚠ 首次充值將預扣 0.05 SUI 作為 Gas 費用
+                    ⚠ 首次充值將預扣 0.2 SUI 作為 Gas 費用
                   </p>
                 )}
               </>
