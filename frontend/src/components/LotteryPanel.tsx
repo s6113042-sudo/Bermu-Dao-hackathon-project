@@ -11,8 +11,8 @@ interface LotteryPanelProps {
   playerBalanceUSDCId?: string | null
 }
 
-export default function LotteryPanel({ lottery, isWalletConnected, onClose, playerBalanceId, playerBalanceUSDCId }: LotteryPanelProps) {
-  const { lotteryInfo, lotteryLoading, myTickets, winningTicket, triggerLottery, claimPrize, discardTicket, discardAllOld, isBusy, lotteryError } = lottery
+export default function LotteryPanel({ lottery, isWalletConnected, onClose }: LotteryPanelProps) {
+  const { lotteryInfo, lotteryLoading, myTickets, winningTicket, triggerLottery, discardTicket, discardAllOld, isBusy, lotteryError } = lottery
   const [showTickets, setShowTickets] = useState(false)
   const [showRules, setShowRules] = useState(false)
 
