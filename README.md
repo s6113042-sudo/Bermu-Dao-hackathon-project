@@ -59,11 +59,23 @@
 
 ## 合約地址（Devnet）
 
+> 本專案所有合約均部署於 **Sui 開發網（Devnet）**。
+
+### 遊戲合約
+
 | 物件 | ID |
 |---|---|
 | Package | `0x658ae769856c4a418f2202ac00a1561a0e62f411c92bb259f1d6c7c9623442c2` |
 | GamePlatform | `0xb918916b38ebe12f8e330b5b354e15d1ec4a2d671b53b0cb850ffd410d499e08` |
 | LotterySystem | `0x8ba41f163421bddcc6006dd71411bc14cab1da234963da686a0f24f5f4db88fa` |
+
+### 代幣合約
+
+| 代幣 | 說明 | 資訊 |
+|---|---|---|
+| SUI | Sui 鏈原生代幣 | 原生幣，無需獨立合約地址 |
+| USDC | 測試用穩定幣（同 Package 內發行） | Coin Type：`0x658ae769856c4a418f2202ac00a1561a0e62f411c92bb259f1d6c7c9623442c2::usdc::USDC` |
+| USDC TreasuryCap | USDC 鑄造權限物件（測試水龍頭用） | `0xce7d09dc5555c1511d62f97469cbee67a526b14fbb176dc6eb607fab07f7f628` |
 
 ---
 
