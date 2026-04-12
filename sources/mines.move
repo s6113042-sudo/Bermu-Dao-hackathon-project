@@ -99,10 +99,12 @@ module gamefi::mines {
         usdc_reserved: u64,
         /// 莊家優勢（basis points，例如 300 = 3%）
         house_edge_bps: u64,
-        /// 最低押注（SUI: MIST 單位；USDC: 微 USDC 單位）
+        /// SUI 最低押注（MIST 單位）
         min_bet: u64,
         /// SUI 最高押注（MIST 單位）
         max_bet: u64,
+        /// USDC 最低押注（raw USDC 單位，獨立於 SUI）
+        min_bet_usdc: u64,
         /// USDC 最高押注（raw USDC 單位，獨立於 SUI）
         max_bet_usdc: u64,
         /// SUI 單局最大賠付上限（含押注本金，單位 MIST）
@@ -241,8 +243,9 @@ module gamefi::mines {
             usdc_treasury: balance::zero(),
             usdc_reserved: 0,
             house_edge_bps: 500,                       // 預設 5% 莊家優勢
-            min_bet: 1_000_000,                        // SUI: 0.001 SUI；USDC: 1 USDC (1_000_000)
+            min_bet: 10_000_000,                       // SUI: 0.01 SUI
             max_bet: 10_000_000_000,                   // SUI: 10 SUI
+            min_bet_usdc: 1_000_000,                   // USDC: 1 USDC
             max_bet_usdc: 10_000_000,                  // USDC: 10 USDC
             max_single_payout: DEFAULT_MAX_SINGLE_PAYOUT,
             max_single_payout_usdc: DEFAULT_MAX_SINGLE_PAYOUT_USDC,
@@ -769,7 +772,7 @@ module gamefi::mines {
         ctx: &mut TxContext,
     ): GameSessionUSDC {
         assert!(!platform.paused, EPlatformPaused);
-        assert!(bet_amount >= platform.min_bet, EBetTooSmall);
+        assert!(bet_amount >= platform.min_bet_usdc, EBetTooSmall);
         assert!(bet_amount <= platform.max_bet_usdc, EBetTooLarge);
         assert!(bet_amount <= platform.max_single_payout_usdc, EBetExceedsSinglePayoutCap);
         assert!(balance::value(&player_balance.balance) >= bet_amount, EInsufficientBalance);
@@ -1142,6 +1145,16 @@ module gamefi::mines {
         platform.max_bet = max_bet;
     }
 
+    /// 設定 USDC 最低押注下限（獨立欄位，不影響 SUI）
+    public fun set_min_bet_usdc(
+        _: &AdminCap,
+        platform: &mut GamePlatform,
+        min_bet_usdc: u64,
+    ) {
+        assert!(min_bet_usdc > 0 && min_bet_usdc <= platform.max_bet_usdc, EInvalidBetLimits);
+        platform.min_bet_usdc = min_bet_usdc;
+    }
+
     /// 設定 USDC 最高押注上限（獨立欄位，不影響 SUI）
     public fun set_max_bet_usdc(
         _: &AdminCap,
@@ -1258,9 +1271,14 @@ module gamefi::mines {
         platform.house_edge_bps
     }
 
-    /// 查詢最低押注
+    /// 查詢 SUI 最低押注
     public fun min_bet(platform: &GamePlatform): u64 {
         platform.min_bet
+    }
+
+    /// 查詢 USDC 最低押注
+    public fun min_bet_usdc(platform: &GamePlatform): u64 {
+        platform.min_bet_usdc
     }
 
     /// 查詢 SUI 最高押注

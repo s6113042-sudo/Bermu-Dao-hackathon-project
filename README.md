@@ -22,9 +22,9 @@
 |---|---|
 | 格子盤 | 4×4（16 格） |
 | 地雷數量 | 5 |
-| 最低押注（SUI） | 0.001 SUI |
+| 最低押注（SUI） | 0.01 SUI |
 | 最高押注（SUI） | 10 SUI |
-| 最低押注（USDC） | 0.01 USDC |
+| 最低押注（USDC） | 1 USDC |
 | 最高押注（USDC） | 10 USDC |
 | 莊家優勢 | 5% |
 
@@ -67,17 +67,17 @@
 
 | 物件 | ID |
 |---|---|
-| Package | `0x658ae769856c4a418f2202ac00a1561a0e62f411c92bb259f1d6c7c9623442c2` |
-| GamePlatform | `0xb918916b38ebe12f8e330b5b354e15d1ec4a2d671b53b0cb850ffd410d499e08` |
-| LotterySystem | `0x8ba41f163421bddcc6006dd71411bc14cab1da234963da686a0f24f5f4db88fa` |
+| Package | `0xcb6711d9fe1ba096f6ae53d5179b8dc4f2fa82249a5bb9bfa86e6f947a5cc1d0` |
+| GamePlatform | `0x1503be4430c13cb9d9a90722a91ad1af22eb7667043f73351a533959fc02e94a` |
+| LotterySystem | `0xbddac7c8a0ce7d6a464c22d964929ac7df22b53a2f2c3521219ace780879474c` |
 
 ### 代幣合約
 
 | 代幣 | 說明 | 資訊 |
 |---|---|---|
 | SUI | Sui 鏈原生代幣 | 原生幣，無需獨立合約地址 |
-| USDC | 測試用穩定幣（同 Package 內發行） | Coin Type：`0x658ae769856c4a418f2202ac00a1561a0e62f411c92bb259f1d6c7c9623442c2::usdc::USDC` |
-| USDC TreasuryCap | USDC 鑄造權限物件（測試水龍頭用） | `0xce7d09dc5555c1511d62f97469cbee67a526b14fbb176dc6eb607fab07f7f628` |
+| USDC | 測試用穩定幣（同 Package 內發行） | Coin Type：`0xcb6711d9fe1ba096f6ae53d5179b8dc4f2fa82249a5bb9bfa86e6f947a5cc1d0::usdc::USDC` |
+| USDC TreasuryCap | USDC 鑄造權限物件（測試水龍頭用） | `0xc557c03171ae603ee9679fd4c18b7fe9343b4d14ca38e2a5a150000f98dcf8c1` |
 
 ---
 

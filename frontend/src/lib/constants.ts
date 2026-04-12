@@ -5,19 +5,19 @@
 
 /** 已部署的 Move Package ID */
 export const PACKAGE_ID =
-  '0x658ae769856c4a418f2202ac00a1561a0e62f411c92bb259f1d6c7c9623442c2'
+  '0xcb6711d9fe1ba096f6ae53d5179b8dc4f2fa82249a5bb9bfa86e6f947a5cc1d0'
 
 /** GamePlatform 共享對象 ID */
 export const GAME_PLATFORM_ID =
-  '0xb918916b38ebe12f8e330b5b354e15d1ec4a2d671b53b0cb850ffd410d499e08'
+  '0x1503be4430c13cb9d9a90722a91ad1af22eb7667043f73351a533959fc02e94a'
 
 /** LotterySystem 共享對象 ID */
 export const LOTTERY_SYSTEM_ID =
-  '0x8ba41f163421bddcc6006dd71411bc14cab1da234963da686a0f24f5f4db88fa'
+  '0xbddac7c8a0ce7d6a464c22d964929ac7df22b53a2f2c3521219ace780879474c'
 
 /** USDC TreasuryCap 共享對象 ID（測試用水龍頭） */
 export const USDC_TREASURY_CAP_ID =
-  '0xce7d09dc5555c1511d62f97469cbee67a526b14fbb176dc6eb607fab07f7f628'
+  '0xc557c03171ae603ee9679fd4c18b7fe9343b4d14ca38e2a5a150000f98dcf8c1'
 
 /** Sui 鏈上 Random 共享對象（固定地址） */
 export const RANDOM_OBJECT_ID = '0x8'
@@ -27,7 +27,7 @@ export const CLOCK_OBJECT_ID = '0x6'
 
 /** USDC Coin Type（含 package prefix） */
 export const USDC_COIN_TYPE =
-  '0x658ae769856c4a418f2202ac00a1561a0e62f411c92bb259f1d6c7c9623442c2::usdc::USDC'
+  '0xcb6711d9fe1ba096f6ae53d5179b8dc4f2fa82249a5bb9bfa86e6f947a5cc1d0::usdc::USDC'
 
 /** Move 模組名 */
 export const MODULE_NAME = 'mines'
@@ -54,14 +54,14 @@ export const MIST_PER_SUI = 1_000_000_000n
 /** 1 USDC = 1_000_000 raw（6 位小數） */
 export const RAW_PER_USDC = 1_000_000n
 
-/** 最低押注 SUI：0.001 SUI */
-export const MIN_BET_SUI = 0.001
+/** 最低押注 SUI：0.01 SUI */
+export const MIN_BET_SUI = 0.01
 
 /** 最高押注 SUI：10 SUI */
 export const MAX_BET_SUI = 10
 
-/** 最低押注 USDC：0.01 USDC */
-export const MIN_BET_USDC = 0.01
+/** 最低押注 USDC：1 USDC */
+export const MIN_BET_USDC = 1
 
 /** 最高押注 USDC：10 USDC（合約 max_bet_usdc = 10 USDC） */
 export const MAX_BET_USDC = 10
