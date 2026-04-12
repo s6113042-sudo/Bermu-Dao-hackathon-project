@@ -145,12 +145,6 @@ sui client publish --gas-budget 100000000
 
 ---
 
-## 專案連結
-
-- GitHub Repo：[s6113042-sudo/Bermu-Dao-hackathon-project](https://github.com/s6113042-sudo/Bermu-Dao-hackathon-project)
-
----
-
 ## 授權條款
 
 MIT
