@@ -1,7 +1,6 @@
 import { useState, useEffect, type ReactNode } from 'react'
 import { UseLotteryResult } from '../hooks/useLottery'
 import { MIST_PER_SUI, RAW_PER_USDC } from '../lib/constants'
-import { LotteryTicket } from '../types/game'
 
 interface LotteryPanelProps {
   lottery: UseLotteryResult
@@ -11,8 +10,8 @@ interface LotteryPanelProps {
   playerBalanceUSDCId?: string | null
 }
 
-export default function LotteryPanel({ lottery, isWalletConnected, onClose, playerBalanceId, playerBalanceUSDCId }: LotteryPanelProps) {
-  const { lotteryInfo, lotteryLoading, myTickets, winningTickets, triggerLottery, discardAllOld, isBusy, lotteryError } = lottery
+export default function LotteryPanel({ lottery, isWalletConnected, onClose }: LotteryPanelProps) {
+  const { lotteryInfo, lotteryLoading, myTickets, winningTicket, triggerLottery, discardAllOld, isBusy, lotteryError } = lottery
   const [showRules, setShowRules] = useState(false)
   const [remaining, setRemaining] = useState(0)
 
@@ -33,10 +32,9 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose, play
   // 分組：本輪 vs 舊彩票
   const currentTickets = myTickets.filter(t => t.round === currentRound)
   const oldTickets     = myTickets.filter(t => t.round < currentRound)
-  const winningIds     = new Set(winningTickets.map(t => t.objectId))
-  // 舊彩票中可回收的（排除所有中獎彩票）
+  // 舊彩票中可回收的（排除中獎彩票）
   const recyclableIds  = oldTickets
-    .filter(t => !winningIds.has(t.objectId))
+    .filter(t => t.objectId !== winningTicket?.objectId)
     .map(t => t.objectId)
 
   return (
@@ -121,14 +119,14 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose, play
         )}
 
         {/* ── 上輪未中獎提示 ── */}
-        {oldTickets.length > 0 && winningTickets.length === 0 && (
+        {oldTickets.length > 0 && !winningTicket && (
           <div
             className="flex items-center justify-between px-3 py-2.5 rounded-xl text-xs"
             style={{ background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)' }}
           >
             <div className="flex items-center gap-2 text-gray-400">
               <span>😔</span>
-              <span>舊彩票 <span className="text-gray-300 font-medium">{oldTickets.length}</span> 張未中獎</span>
+              <span>上輪 <span className="text-gray-300 font-medium">{oldTickets.length}</span> 張彩票未中獎</span>
             </div>
             {recyclableIds.length > 0 && (
               <button
@@ -143,17 +141,23 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose, play
           </div>
         )}
 
-        {/* ── 中獎橫幅（每張中獎票一條） ── */}
-        {winningTickets.map((wt) => (
-          <WinningBanner
-            key={wt.objectId}
-            ticket={wt}
-            lottery={lottery}
-            isBusy={isBusy}
-            playerBalanceId={playerBalanceId}
-            playerBalanceUSDCId={playerBalanceUSDCId}
-          />
-        ))}
+        {/* ── 中獎橫幅 ── */}
+        {winningTicket && (
+          <div
+            className="rounded-xl p-4 flex items-center gap-3"
+            style={{
+              background: 'linear-gradient(135deg, rgba(250,204,21,0.12), rgba(217,119,6,0.08))',
+              border: '1px solid rgba(250,204,21,0.35)',
+            }}
+          >
+            <span className="text-2xl">🏆</span>
+            <div>
+              <p className="text-yellow-300 font-bold text-sm">恭喜中獎！</p>
+              <p className="text-yellow-500 text-xs">獎金正在自動存入您的遊戲餘額…</p>
+            </div>
+            {isBusy && <Spinner />}
+          </div>
+        )}
 
         {/* 底部間距 */}
         <div className="h-1" />
@@ -290,57 +294,6 @@ function RuleItem({ icon, title, children }: { icon: string; title: string; chil
         <p className="text-purple-300 font-semibold text-xs mb-0.5">{title}</p>
         <p className="text-gray-400 text-xs leading-relaxed">{children}</p>
       </div>
-    </div>
-  )
-}
-
-// ── 中獎橫幅（單張中獎票） ──
-function WinningBanner({ ticket, lottery, isBusy, playerBalanceId, playerBalanceUSDCId }: {
-  ticket: LotteryTicket
-  lottery: UseLotteryResult
-  isBusy: boolean
-  playerBalanceId?: string | null
-  playerBalanceUSDCId?: string | null
-}) {
-  const [claiming, setClaiming] = useState(false)
-
-  const handleClaim = async () => {
-    if (!playerBalanceId) return
-    setClaiming(true)
-    try {
-      await lottery.claimPrize(ticket.objectId, playerBalanceId, playerBalanceUSDCId ?? null)
-    } finally {
-      setClaiming(false)
-    }
-  }
-
-  return (
-    <div
-      className="rounded-xl p-4 flex items-center justify-between gap-3"
-      style={{
-        background: 'linear-gradient(135deg, rgba(250,204,21,0.12), rgba(217,119,6,0.08))',
-        border: '1px solid rgba(250,204,21,0.35)',
-      }}
-    >
-      <div className="flex items-center gap-3">
-        <span className="text-2xl">🏆</span>
-        <div>
-          <p className="text-yellow-300 font-bold text-sm">第 {ticket.round} 輪中獎！</p>
-          <p className="text-yellow-600 text-xs">票號 #{ticket.ticketNumber}・點擊領取獎金</p>
-        </div>
-      </div>
-      {(isBusy || claiming) ? (
-        <Spinner />
-      ) : (
-        <button
-          onClick={handleClaim}
-          disabled={isBusy || claiming || !playerBalanceId}
-          className="text-xs px-3 py-1.5 rounded-lg font-semibold transition-opacity hover:opacity-80 disabled:opacity-40"
-          style={{ background: 'rgba(250,204,21,0.2)', color: '#fde68a', border: '1px solid rgba(250,204,21,0.4)' }}
-        >
-          領獎
-        </button>
-      )}
     </div>
   )
 }
