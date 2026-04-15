@@ -1,0 +1,8 @@
+[package]
+name = "tsui"
+edition = "2024.beta"
+
+[dependencies]
+
+[addresses]
+tsui = "0x0"
