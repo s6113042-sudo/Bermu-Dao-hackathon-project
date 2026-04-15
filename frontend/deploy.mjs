@@ -1,5 +1,5 @@
 /**
- * deploy.mjs — 全新 publish 合約到 devnet（繞過 CLI 環境檢查）
+ * deploy.mjs — 全新 publish 合約到 testnet（繞過 CLI 環境檢查）
  * 執行：node deploy.mjs
  */
 import { readFileSync } from 'fs'
@@ -13,7 +13,7 @@ import { fromBase64 } from '@mysten/sui/utils'
 const __dirname = dirname(fileURLToPath(import.meta.url))
 
 // ── 設定 ──────────────────────────────────────────────────────────
-const DEVNET_RPC = 'https://fullnode.devnet.sui.io:443'
+const DEVNET_RPC = 'https://fullnode.testnet.sui.io:443'
 
 // Move 2024 content-hash address → 替換為 0x0
 const COMPUTED_ADDR = 'cebbb240972009790cfae75cae5f3d8ddf44437c1065c2409a941c69e75b98b1'
@@ -45,7 +45,7 @@ function replaceAddr(bytecodeArr) {
 const buildDir = join(__dirname, '..', 'build', 'gamefi', 'bytecode_modules')
 
 console.log('讀取 bytecode...')
-const modules = ['mines', 'lottery', 'usdc'].map(name => {
+const modules = ['mines', 'lottery', 'usdc', 'tsui'].map(name => {
   console.log(` - ${name}.mv`)
   return replaceAddr(Array.from(readFileSync(join(buildDir, `${name}.mv`))))
 })

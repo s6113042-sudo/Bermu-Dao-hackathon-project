@@ -5,19 +5,23 @@
 
 /** 已部署的 Move Package ID */
 export const PACKAGE_ID =
-  '0xdd41e68169fc82477a845ea27d83694b161526565f0202f14dfd41efb64c1b09'
+  '0x8aff1b991af9558e586941593cfa17a93181cdd0ef2363e3768f73e5729e7870'
 
 /** GamePlatform 共享對象 ID */
 export const GAME_PLATFORM_ID =
-  '0xdf40ef5d89fa54e3a90a97cedfb0881f4f90c3676173e89b541190a5665e89da'
+  '0xd6b7ebefcfeacdeb654ce0c2b081cbd0585ec74b8928ff06613ce2b772fcc692'
 
 /** LotterySystem 共享對象 ID */
 export const LOTTERY_SYSTEM_ID =
-  '0x5e6aee6cf2af443eb4645ad48a55bda9b6052dd80600a727c765dcddf8cded22'
+  '0xb9098fb88165dd430bab03061d86f6a0b9635e334f3a922ad36c1b4547689fc0'
 
 /** USDC TreasuryCap 共享對象 ID（測試用水龍頭） */
 export const USDC_TREASURY_CAP_ID =
-  '0x94be437edabc8e480b9d23b6f8ae01a2725ffa08f971b231b41128b64320bcc7'
+  '0x4af6b325415d161e937d586803d59b4f5bafa415ea81c3c2f9c470d5ac6cda54'
+
+/** TSUI TreasuryCap 共享對象 ID（測試用水龍頭） */
+export const TSUI_TREASURY_CAP_ID =
+  '0xb62df624604cd253d524585d7f01f860c610f277a7216927e45078ede65ec7c2'
 
 /** Sui 鏈上 Random 共享對象（固定地址） */
 export const RANDOM_OBJECT_ID = '0x8'
@@ -27,7 +31,15 @@ export const CLOCK_OBJECT_ID = '0x6'
 
 /** USDC Coin Type（含 package prefix） */
 export const USDC_COIN_TYPE =
-  '0xdd41e68169fc82477a845ea27d83694b161526565f0202f14dfd41efb64c1b09::usdc::USDC'
+  '0x8aff1b991af9558e586941593cfa17a93181cdd0ef2363e3768f73e5729e7870::usdc::USDC'
+
+/** TSUI Coin Type（含 package prefix） */
+export const TSUI_COIN_TYPE =
+  '0x8aff1b991af9558e586941593cfa17a93181cdd0ef2363e3768f73e5729e7870::tsui::TSUI'
+
+/** Gas 錢包地址（代替玩家支付 gas） */
+export const GAS_WALLET_ADDRESS =
+  '0x6795632fbeaad554a196847837adfb02ce2be2c6282cfa3b104bb29caa413432'
 
 /** Move 模組名 */
 export const MODULE_NAME = 'mines'
@@ -73,7 +85,7 @@ export const LOTTERY_INTERVAL_MS = 20 * 60 * 1000
 // Sui Explorer
 // ============================================================
 
-export const EXPLORER_BASE = 'https://suiscan.xyz/devnet'
+export const EXPLORER_BASE = 'https://suiscan.xyz/testnet'
 
 export function explorerTx(digest: string) {
   return `${EXPLORER_BASE}/tx/${digest}`

@@ -8,7 +8,7 @@
 import { useSuiClientQuery, useSuiClient } from '@mysten/dapp-kit'
 import { useState, useEffect, useRef } from 'react'
 import { Transaction } from '@mysten/sui/transactions'
-import { PACKAGE_ID, MODULE_NAME, USDC_TREASURY_CAP_ID, USDC_COIN_TYPE } from '../lib/constants'
+import { PACKAGE_ID, MODULE_NAME, USDC_TREASURY_CAP_ID, USDC_COIN_TYPE, TSUI_TREASURY_CAP_ID, TSUI_COIN_TYPE } from '../lib/constants'
 import { UseSessionKeyResult } from './useSessionKey'
 
 /** 交易後連續輪詢，確保 RPC 快速同步 */
@@ -148,7 +148,9 @@ export function usePlayerBalance(session: UseSessionKeyResult): UsePlayerBalance
   const createPlayerBalance = async (): Promise<string> => {
     const tx = new Transaction()
     tx.moveCall({ target: `${PACKAGE_ID}::${MODULE_NAME}::create_player_balance` })
-    const { effects } = await executeWithSession(tx)
+    const { digest, effects } = await executeWithSession(tx)
+    // 等待交易確認，確保物件已上鏈後才返回 ID
+    await suiClient.waitForTransaction({ digest })
     const created = effects?.created ?? []
     const pbObj = created.find(
       (obj: any) =>
@@ -162,27 +164,19 @@ export function usePlayerBalance(session: UseSessionKeyResult): UsePlayerBalance
     return newId
   }
 
+  // 從 TreasuryCap 鑄造 TSUI 並存入 PlayerBalance（gas 由 gas 錢包代付）
   const deposit = async (amountMist: bigint, explicitPbId?: string) => {
     const pbId = explicitPbId ?? playerBalanceId
     if (!pbId) throw new Error('PlayerBalance 尚未建立')
-
-    // 先查 session 持有的所有 SUI coin，merge 後再 split
-    // 避免「gas coin 只有新收到的 amountMist，split 後無法付手續費」
-    const { data: coins } = await suiClient.getCoins({
-      owner: sessionAddress,
-      coinType: '0x2::sui::SUI',
-    })
     const tx = new Transaction()
-    if (coins.length > 1) {
-      tx.mergeCoins(
-        tx.gas,
-        coins.slice(1).map((c) => tx.object(c.coinObjectId)),
-      )
-    }
-    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)])
+    const [minted] = tx.moveCall({
+      target: `0x2::coin::mint`,
+      typeArguments: [TSUI_COIN_TYPE],
+      arguments: [tx.object(TSUI_TREASURY_CAP_ID), tx.pure.u64(amountMist)],
+    })
     tx.moveCall({
       target: `${PACKAGE_ID}::${MODULE_NAME}::deposit`,
-      arguments: [tx.object(pbId), coin],
+      arguments: [tx.object(pbId), minted],
     })
     setSuiDelta(prev => prev + amountMist)   // 樂觀加
     await executeWithSession(tx)
@@ -196,7 +190,8 @@ export function usePlayerBalance(session: UseSessionKeyResult): UsePlayerBalance
       target: `${PACKAGE_ID}::${MODULE_NAME}::withdraw`,
       arguments: [tx.object(playerBalanceId), tx.pure.u64(amountMist)],
     })
-    tx.transferObjects([coin], tx.pure.address(sessionAddress))
+    // 提取的 TSUI 送回 session 地址
+    tx.transferObjects([coin], sessionAddress)
     setSuiDelta(prev => prev - amountMist)   // 樂觀減
     await executeWithSession(tx)
     scheduleRefetch(refetch)
@@ -207,7 +202,8 @@ export function usePlayerBalance(session: UseSessionKeyResult): UsePlayerBalance
   const createPlayerBalanceUSDC = async (): Promise<string> => {
     const tx = new Transaction()
     tx.moveCall({ target: `${PACKAGE_ID}::${MODULE_NAME}::create_player_balance_usdc` })
-    const { effects } = await executeWithSession(tx)
+    const { digest, effects } = await executeWithSession(tx)
+    await suiClient.waitForTransaction({ digest })
     const created = effects?.created ?? []
     const pbObj = created.find(
       (obj: any) =>

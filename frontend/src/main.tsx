@@ -9,15 +9,15 @@ import App from './App'
 
 const queryClient = new QueryClient()
 
-// Devnet RPC endpoint
+// Testnet RPC endpoint
 const networks = {
-  devnet: { url: getFullnodeUrl('devnet') },
+  testnet: { url: getFullnodeUrl('testnet') },
 }
 
 ReactDOM.createRoot(document.getElementById('root')!).render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
-      <SuiClientProvider networks={networks} defaultNetwork="devnet">
+      <SuiClientProvider networks={networks} defaultNetwork="testnet">
         {/* autoConnect: try to reconnect to previously connected Slush Wallet */}
         <WalletProvider autoConnect>
           <App />

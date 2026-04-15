@@ -18,8 +18,8 @@ module gamefi::lottery {
     use sui::coin::{Self, Coin};
     use sui::clock::{Self, Clock};
     use sui::random::{Self, Random};
-    use sui::sui::SUI;
     use sui::event;
+    use gamefi::tsui::TSUI;
     use gamefi::usdc::USDC;
 
     // === 常數 ===
@@ -52,7 +52,7 @@ module gamefi::lottery {
         /// 上輪快照：待領 USDC 獎金
         pending_prize_usdc: u64,
         /// SUI 獎池餘額
-        prize_pool_sui: Balance<SUI>,
+        prize_pool_sui: Balance<TSUI>,
         /// USDC 獎池餘額
         prize_pool_usdc: Balance<USDC>,
     }
@@ -131,7 +131,7 @@ module gamefi::lottery {
     /// 注入 SUI 到獎池（mines.move 在 SUI 遊戲獲利時呼叫）
     public(package) fun add_prize_sui(
         lottery: &mut LotterySystem,
-        funds: Balance<SUI>,
+        funds: Balance<TSUI>,
     ) {
         balance::join(&mut lottery.prize_pool_sui, funds);
     }
@@ -198,12 +198,12 @@ module gamefi::lottery {
     ///   - 彩票發放時間早於開獎時間（防止開獎後偽造）
     ///   - 彩票號碼與中獎號碼一致
     ///
-    /// 回傳：(Coin<SUI>, Coin<USDC>) 供 PTB 串接 deposit_prize_*
+    /// 回傳：(Coin<TSUI>, Coin<USDC>) 供 PTB 串接 deposit_prize_*
     public fun claim_prize(
         lottery: &mut LotterySystem,
         ticket: LotteryTicket,
         ctx: &mut TxContext,
-    ) : (Coin<SUI>, Coin<USDC>) {
+    ) : (Coin<TSUI>, Coin<USDC>) {
         assert!(lottery.pending_prize_sui > 0 || lottery.pending_prize_usdc > 0, ENoPrize);
         assert!(ticket.round == lottery.round - 1, EWrongRound);
         assert!(ticket.issued_at_ms < lottery.last_draw_ms, ETicketTooLate);

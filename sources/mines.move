@@ -19,10 +19,10 @@
 module gamefi::mines {
     use sui::balance::{Self, Balance};
     use sui::coin::{Self, Coin};
-    use sui::sui::SUI;
     use sui::random::{Self, Random};
     use sui::clock::Clock;
     use sui::event;
+    use gamefi::tsui::TSUI;
     use gamefi::usdc::USDC;
     use gamefi::lottery::{Self, LotterySystem};
 
@@ -90,7 +90,7 @@ module gamefi::mines {
     public struct GamePlatform has key {
         id: UID,
         /// SUI 金庫，用於支付玩家獲勝賠付
-        treasury: Balance<SUI>,
+        treasury: Balance<TSUI>,
         /// SUI 遊戲進行中的已預留淨賠付總和
         reserved: u64,
         /// USDC 金庫
@@ -125,7 +125,7 @@ module gamefi::mines {
     /// 玩家 SUI 存款餘額（玩家擁有對象）
     public struct PlayerBalance has key {
         id: UID,
-        balance: Balance<SUI>,
+        balance: Balance<TSUI>,
     }
 
     /// 玩家 USDC 存款餘額（玩家擁有對象）
@@ -142,7 +142,7 @@ module gamefi::mines {
         /// 押注金額
         bet_amount: u64,
         /// 實際存放押注的餘額（遊戲結束時轉出）
-        bet_balance: Balance<SUI>,
+        bet_balance: Balance<TSUI>,
         /// 尚未揭開的格子數
         tiles_remaining: u64,
         /// 尚未判定的炸彈數
@@ -270,7 +270,7 @@ module gamefi::mines {
     /// 存入 SUI 到玩家帳戶
     public fun deposit(
         player_balance: &mut PlayerBalance,
-        payment: Coin<SUI>,
+        payment: Coin<TSUI>,
     ) {
         balance::join(&mut player_balance.balance, coin::into_balance(payment));
     }
@@ -280,7 +280,7 @@ module gamefi::mines {
         player_balance: &mut PlayerBalance,
         amount: u64,
         ctx: &mut TxContext,
-    ): Coin<SUI> { // 1. 這裡加入回傳型別
+    ): Coin<TSUI> { // 1. 這裡加入回傳型別
         assert!(balance::value(&player_balance.balance) >= amount, EInsufficientBalance);
         let withdrawn = balance::split(&mut player_balance.balance, amount);
     
@@ -292,7 +292,7 @@ module gamefi::mines {
     public fun withdraw_all(
         player_balance: &mut PlayerBalance,
         ctx: &mut TxContext,
-    ): Coin<SUI> {
+    ): Coin<TSUI> {
         let amount = balance::value(&player_balance.balance);
         assert!(amount > 0, EInsufficientBalance);
         let withdrawn = balance::split(&mut player_balance.balance, amount);
@@ -341,7 +341,7 @@ module gamefi::mines {
     /// 將抽獎 SUI 獎金存入玩家帳戶（由 PTB 串接 lottery::claim_prize 呼叫）
     public fun deposit_prize_sui(
         player_balance: &mut PlayerBalance,
-        prize: Coin<SUI>,
+        prize: Coin<TSUI>,
     ) {
         if (coin::value(&prize) > 0) {
             balance::join(&mut player_balance.balance, coin::into_balance(prize));
@@ -1104,7 +1104,7 @@ module gamefi::mines {
     public fun add_liquidity(
         _: &AdminCap,
         platform: &mut GamePlatform,
-        coin: Coin<SUI>,
+        coin: Coin<TSUI>,
     ) {
         balance::join(&mut platform.treasury, coin::into_balance(coin));
     }
@@ -1116,7 +1116,7 @@ module gamefi::mines {
         platform: &mut GamePlatform,
         amount: u64,
         ctx: &mut TxContext,
-    ): Coin<SUI> {
+    ): Coin<TSUI> {
         let available = balance::value(&platform.treasury) - platform.reserved;
         assert!(amount <= available, EInsufficientBalance);
         let withdrawn = balance::split(&mut platform.treasury, amount);

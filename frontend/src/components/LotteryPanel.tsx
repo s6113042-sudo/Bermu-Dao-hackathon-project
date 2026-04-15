@@ -15,8 +15,18 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
   const { lotteryInfo, lotteryLoading, myTickets, winningTicket, triggerLottery, discardTicket, discardAllOld, isBusy, lotteryError } = lottery
   const [showTickets, setShowTickets] = useState(false)
   const [showRules, setShowRules] = useState(false)
+  const [remaining, setRemaining] = useState(0)
 
   const currentRound = lotteryInfo?.round ?? 0
+
+  // 倒數計時（提升至此層，供按鈕邏輯使用）
+  useEffect(() => {
+    if (!lotteryInfo?.nextDrawMs) return
+    const update = () => setRemaining(Math.max(0, lotteryInfo.nextDrawMs - Date.now()))
+    update()
+    const id = setInterval(update, 1000)
+    return () => clearInterval(id)
+  }, [lotteryInfo?.nextDrawMs])
 
   const prizePoolSui  = lotteryInfo ? (Number(lotteryInfo.prizePoolSui)  / Number(MIST_PER_SUI)).toFixed(3) : '0.000'
   const prizePoolUsdc = lotteryInfo ? (Number(lotteryInfo.prizePoolUsdc) / Number(RAW_PER_USDC)).toFixed(2) : '0.00'
@@ -59,7 +69,6 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Countdown nextDrawMs={lotteryInfo?.nextDrawMs ?? null} />
           <button
             onClick={() => setShowRules(true)}
             className="w-6 h-6 rounded-full flex items-center justify-center text-xs font-bold transition-colors hover:opacity-80"
@@ -198,18 +207,30 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
 
         {/* ── 觸發開獎 ── */}
         {isWalletConnected && (
-          <button
-            onClick={triggerLottery}
-            disabled={isBusy}
-            className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40"
-            style={{
-              background: 'rgba(139,92,246,0.15)',
-              border: '1px solid rgba(139,92,246,0.35)',
-              color: '#c4b5fd',
-            }}
-          >
-            {isBusy ? <Spinner /> : '觸發開獎（任何人皆可）'}
-          </button>
+          <div className="flex flex-col gap-1.5">
+            <button
+              onClick={triggerLottery}
+              disabled={isBusy || remaining > 0}
+              className="w-full py-2.5 rounded-xl text-sm font-semibold transition-all hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed"
+              style={{
+                background: remaining > 0 ? 'rgba(255,255,255,0.05)' : 'rgba(139,92,246,0.15)',
+                border: `1px solid ${remaining > 0 ? 'rgba(255,255,255,0.1)' : 'rgba(139,92,246,0.35)'}`,
+                color: remaining > 0 ? '#6b7280' : '#c4b5fd',
+              }}
+            >
+              {isBusy ? <Spinner /> : remaining > 0 ? '等待開獎時間…' : '觸發開獎（任何人皆可）'}
+            </button>
+            {remaining > 0 && !isBusy && (
+              <p className="text-xs text-center" style={{ color: '#6b7280' }}>
+                距離下次開獎還有{' '}
+                <span style={{ color: '#a78bfa', fontVariantNumeric: 'tabular-nums' }}>
+                  {String(Math.floor(remaining / 60000)).padStart(2, '0')}:
+                  {String(Math.floor((remaining % 60000) / 1000)).padStart(2, '0')}
+                </span>
+                ，倒數結束後才可觸發
+              </p>
+            )}
+          </div>
         )}
 
         {/* ── 錯誤訊息 ── */}
@@ -280,42 +301,6 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
   )
 }
 
-// ── 倒數計時器 ──
-function Countdown({ nextDrawMs }: { nextDrawMs: number | null }) {
-  const [remaining, setRemaining] = useState(0)
-
-  useEffect(() => {
-    if (!nextDrawMs) return
-    const update = () => setRemaining(Math.max(0, nextDrawMs - Date.now()))
-    update()
-    const id = setInterval(update, 1000)
-    return () => clearInterval(id)
-  }, [nextDrawMs])
-
-  if (!nextDrawMs) return null
-
-  const mins = Math.floor(remaining / 60000)
-  const secs = Math.floor((remaining % 60000) / 1000)
-  const isReady = remaining === 0
-
-  return (
-    <div
-      className="flex items-center gap-1.5 px-2.5 py-1 rounded-full"
-      style={{
-        background: isReady ? 'rgba(52,211,153,0.15)' : 'rgba(139,92,246,0.15)',
-        border: `1px solid ${isReady ? 'rgba(52,211,153,0.4)' : 'rgba(139,92,246,0.3)'}`,
-      }}
-    >
-      <span style={{ fontSize: 10 }}>{isReady ? '🟢' : '⏱'}</span>
-      <span
-        className="text-xs font-mono font-bold"
-        style={{ color: isReady ? '#34d399' : '#a78bfa' }}
-      >
-        {isReady ? '可開獎' : `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`}
-      </span>
-    </div>
-  )
-}
 
 // ── 獎池卡片 ──
 function PrizeBox({ label, value, symbol, color, loading, icon }: {

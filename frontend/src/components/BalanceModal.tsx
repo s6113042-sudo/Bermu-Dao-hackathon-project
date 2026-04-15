@@ -1,8 +1,8 @@
 /**
- * BalanceModal — SUI / USDC 遊戲帳戶充值提款
+ * BalanceModal — TSUI / USDC 遊戲帳戶充值提款
  *
- * SUI 充值：主錢包 → session → PlayerBalance（需一次錢包授權）
- * USDC 充值：session 從測試水龍頭鑄造並存入 PlayerBalanceUSDC（無需授權）
+ * TSUI 充值：從測試水龍頭鑄造 TSUI 並存入 PlayerBalance（無需授權，gas 由 gas 錢包代付）
+ * USDC 充值：從測試水龍頭鑄造 USDC 並存入 PlayerBalanceUSDC（無需授權）
  * 提款：session 靜默執行（無需授權）
  */
 
@@ -12,9 +12,6 @@ import { UseSessionKeyResult } from '../hooks/useSessionKey'
 import { UsePlayerBalanceResult } from '../hooks/usePlayerBalance'
 import UsdcIcon from './UsdcIcon'
 
-const GAS_THRESHOLD = 50_000_000n
-const GAS_RESERVE = 200_000_000n
-
 type BalanceCurrency = 'SUI' | 'USDC'
 
 interface BalanceModalProps {
@@ -23,14 +20,11 @@ interface BalanceModalProps {
   onClose: () => void
 }
 
-export default function BalanceModal({ session, playerBalance, onClose }: BalanceModalProps) {
-  const { fundSession, sessionSuiBalance } = session
+export default function BalanceModal({ session: _session, playerBalance, onClose }: BalanceModalProps) {
   const {
     balance, needsCreate, isLoading, deposit, withdraw, createPlayerBalance,
     usdcBalance, needsCreateUSDC, usdcLoading, depositUSDC, withdrawUSDC, createPlayerBalanceUSDC,
   } = playerBalance
-
-  const needsGasTopup = sessionSuiBalance === null || sessionSuiBalance < GAS_THRESHOLD
 
   const [currency, setCurrency] = useState<BalanceCurrency>('SUI')
   const [tab, setTab] = useState<'deposit' | 'withdraw'>('deposit')
@@ -54,24 +48,17 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
     : '0.00'
 
   const handleDeposit = async () => {
+    if (amountRaw <= 0n) return
     setBusy(true)
     setMsg(null)
     try {
       if (currency === 'SUI') {
-        const minRequired = needsGasTopup ? GAS_RESERVE + 1_000_000n : 1_000_000n
-        if (amountRaw < minRequired) {
-          setMsg({ type: 'err', text: needsGasTopup ? '首次充值最少 0.21 SUI（含 0.2 Gas）' : '最少充值 0.001 SUI' })
-          setBusy(false)
-          return
-        }
-        await fundSession(amountRaw)
+        // 建立帳戶（若尚未建立），再鑄造 TSUI 存入
         let pbId = playerBalance.playerBalanceId
         if (needsCreate || !pbId) pbId = await createPlayerBalance()
-        const depositAmount = needsGasTopup ? amountRaw - GAS_RESERVE : amountRaw
-        await deposit(depositAmount, pbId)
-        setMsg({ type: 'ok', text: '充值成功！之後 Play / 翻格 / Cashout 全程無需授權。' })
+        await deposit(amountRaw, pbId)
+        setMsg({ type: 'ok', text: `充值 ${input} TSUI 成功！` })
       } else {
-        // USDC：session 靜默鑄造並存入（無需錢包授權）
         let pbId = playerBalance.playerBalanceUSDCId
         if (needsCreateUSDC || !pbId) pbId = await createPlayerBalanceUSDC()
         await depositUSDC(amountRaw, pbId)
@@ -223,20 +210,13 @@ export default function BalanceModal({ session, playerBalance, onClose }: Balanc
               disabled={busy || amountRaw <= 0n}
               className="btn-primary w-full"
             >
-              {busy ? <Spinner /> : currency === 'SUI' ? '充值（一次授權）' : '充值（無需授權）'}
+              {busy ? <Spinner /> : '充值（無需授權）'}
             </button>
-            {currency === 'SUI' ? (
-              <>
-                <p className="text-xs text-gray-500 text-center">充值後所有遊戲操作無需再次授權</p>
-                {needsGasTopup && (
-                  <p className="text-xs text-center" style={{ color: '#a78bfa' }}>
-                    ⚠ 首次充值將預扣 0.2 SUI 作為 Gas 費用
-                  </p>
-                )}
-              </>
-            ) : (
-              <p className="text-xs text-gray-500 text-center">從測試水龍頭鑄造 USDC，無需錢包授權</p>
-            )}
+            <p className="text-xs text-gray-500 text-center">
+              {currency === 'SUI'
+                ? '從測試水龍頭鑄造 TSUI，Gas 由平台代付'
+                : '從測試水龍頭鑄造 USDC，Gas 由平台代付'}
+            </p>
           </>
         ) : (
           <button

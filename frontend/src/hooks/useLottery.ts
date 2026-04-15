@@ -2,7 +2,7 @@
  * useLottery
  *
  * 查詢 LotterySystem 狀態、玩家彩票 NFT，提供觸發抽獎和領獎功能。
- * 每 30 秒自動刷新一次。
+ * 每 10 秒自動刷新一次；交易後以 1.2s / 2.8s / 5s 連續輪詢確保 RPC 同步。
  */
 
 import { useState, useEffect, useCallback } from 'react'
@@ -16,6 +16,7 @@ import {
   RANDOM_OBJECT_ID,
 } from '../lib/constants'
 import { UseSessionKeyResult } from './useSessionKey'
+
 
 export interface UseLotteryResult {
   lotteryInfo: LotteryInfo | null
@@ -116,9 +117,9 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
     return () => { cancelled = true }
   }, [suiClient, sessionAddress, tick])
 
-  // 每 30 秒自動刷新
+  // 每 10 秒自動刷新
   useEffect(() => {
-    const id = setInterval(refetch, 30_000)
+    const id = setInterval(refetch, 10_000)
     return () => clearInterval(id)
   }, [refetch])
 
@@ -146,7 +147,8 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
           tx.object(CLOCK_OBJECT_ID),
         ],
       })
-      await executeWithSession(tx)
+      const { digest } = await executeWithSession(tx)
+      await suiClient.waitForTransaction({ digest })
       refetch()
     } catch (e: any) {
       const msg: string = e?.message ?? String(e)
@@ -194,7 +196,8 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
         // 無 USDC 帳戶時轉給自己（避免零幣懸空）
         tx.transferObjects([usdcCoin], tx.pure.address(sessionAddress!))
       }
-      await executeWithSession(tx)
+      const { digest } = await executeWithSession(tx)
+      await suiClient.waitForTransaction({ digest })
       refetch()
     } catch (e: any) {
       const msg: string = e?.message ?? String(e)
@@ -220,7 +223,8 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
         target: `${PACKAGE_ID}::lottery::discard_ticket`,
         arguments: [tx.object(ticketId), tx.object(LOTTERY_SYSTEM_ID)],
       })
-      await executeWithSession(tx)
+      const { digest } = await executeWithSession(tx)
+      await suiClient.waitForTransaction({ digest })
       refetch()
     } catch (e: any) {
       const msg: string = e?.message ?? String(e)
@@ -249,7 +253,8 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
           arguments: [tx.object(id), tx.object(LOTTERY_SYSTEM_ID)],
         })
       }
-      await executeWithSession(tx)
+      const { digest } = await executeWithSession(tx)
+      await suiClient.waitForTransaction({ digest })
       refetch()
     } catch (e: any) {
       setLotteryError('批次回收失敗，請重試')

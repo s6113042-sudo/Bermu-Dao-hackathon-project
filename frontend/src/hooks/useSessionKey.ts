@@ -14,7 +14,8 @@
 import { useState, useEffect } from 'react'
 import { Ed25519Keypair } from '@mysten/sui/keypairs/ed25519'
 import { Transaction } from '@mysten/sui/transactions'
-import { useSuiClient, useSignAndExecuteTransaction, useCurrentAccount } from '@mysten/dapp-kit'
+import { useSuiClient } from '@mysten/dapp-kit'
+import { getGasKeypair, getGasAddress } from '../lib/gasWallet'
 const STORAGE_KEY = 'mines_session_privkey'
 
 export interface UseSessionKeyResult {
@@ -57,8 +58,6 @@ function getOrCreateKeypair(): Ed25519Keypair {
 
 export function useSessionKey(): UseSessionKeyResult {
   const suiClient = useSuiClient()
-  const account = useCurrentAccount()
-  const { mutateAsync: walletSignAndExecute } = useSignAndExecuteTransaction()
 
   // Keypair 只初始化一次，存在 state 避免每次 render 重新生成
   const [keypair] = useState<Ed25519Keypair>(getOrCreateKeypair)
@@ -85,29 +84,33 @@ export function useSessionKey(): UseSessionKeyResult {
 
   const refetchBalance = () => setFetchTick((t) => t + 1)
 
-  // ── 從主錢包充值到 session 地址（唯一需要彈窗的操作）──
-  const fundSession = async (amountMist: bigint): Promise<string> => {
-    if (!account) throw new Error('請先連接錢包')
-    const tx = new Transaction()
-    tx.setGasBudget(10_000_000) // 明確設定 gas budget，讓錢包選夠大的 coin
-    const [coin] = tx.splitCoins(tx.gas, [tx.pure.u64(amountMist)])
-    tx.transferObjects([coin], tx.pure.address(sessionAddress))
-    const { digest } = await walletSignAndExecute({ transaction: tx })
-    await suiClient.waitForTransaction({ digest })
+  // ── Session 初始化（gas 由 gas 錢包代付，玩家無需持有原生 SUI）──
+  const fundSession = async (_amountMist: bigint): Promise<string> => {
+    // gas 由 gas 錢包代付，此函式僅回傳 session 地址供呼叫方使用
+    // 不再需要從主錢包轉移原生 SUI
     refetchBalance()
-    return digest
+    return sessionAddress
   }
 
-  // ── 用 session key 靜默執行交易（無彈窗）──
+  // ── 用 session key 靜默執行交易（gas 由 gas 錢包代付）──
   const executeWithSession = async (tx: Transaction) => {
+    const gasAddress = getGasAddress()
+    const gasKeypair = getGasKeypair()
+
     tx.setSender(sessionAddress)
-    const { bytes, signature } = await tx.sign({
-      client: suiClient,
-      signer: keypair,
-    })
+    tx.setGasOwner(gasAddress)
+    tx.setGasBudget(10_000_000)
+
+    const txBytes = await tx.build({ client: suiClient })
+
+    // session key 簽署 tx data
+    const { signature: senderSig } = await keypair.signTransaction(txBytes)
+    // gas 錢包簽署 gas data
+    const { signature: sponsorSig } = await gasKeypair.signTransaction(txBytes)
+
     const result = await suiClient.executeTransactionBlock({
-      transactionBlock: bytes,
-      signature,
+      transactionBlock: txBytes,
+      signature: [senderSig, sponsorSig],
       options: { showEffects: true, showEvents: true },
     })
     refetchBalance()
