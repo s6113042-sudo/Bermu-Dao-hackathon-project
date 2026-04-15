@@ -5,23 +5,23 @@
 
 /** 已部署的 Move Package ID */
 export const PACKAGE_ID =
-  '0x8aff1b991af9558e586941593cfa17a93181cdd0ef2363e3768f73e5729e7870'
+  '0xe3a2548fe26476e33ebff61983e821b6f5752843633ad0dcac2658811a0b4c20'
 
 /** GamePlatform 共享對象 ID */
 export const GAME_PLATFORM_ID =
-  '0xd6b7ebefcfeacdeb654ce0c2b081cbd0585ec74b8928ff06613ce2b772fcc692'
+  '0x7b7682ffe3e2516e6ea40dab7fcd77d92e6af96d3361e04fc5e689f04eff9ad1'
 
 /** LotterySystem 共享對象 ID */
 export const LOTTERY_SYSTEM_ID =
-  '0xb9098fb88165dd430bab03061d86f6a0b9635e334f3a922ad36c1b4547689fc0'
+  '0x1df915d191665bf41d4256d4198b8f7952fa1a8df7929a4500655a0e9429e6d4'
 
 /** USDC TreasuryCap 共享對象 ID（測試用水龍頭） */
 export const USDC_TREASURY_CAP_ID =
-  '0x4af6b325415d161e937d586803d59b4f5bafa415ea81c3c2f9c470d5ac6cda54'
+  '0x4586194c01b7ffb2fbbe6d44557d03ecf0086403d838e11db5ad9799f1b0a81e'
 
 /** TSUI TreasuryCap 共享對象 ID（測試用水龍頭） */
 export const TSUI_TREASURY_CAP_ID =
-  '0xb62df624604cd253d524585d7f01f860c610f277a7216927e45078ede65ec7c2'
+  '0x07a470464f1253cb7454f082e60ec9f8c34bfa18fbfc6d7c864b7a2cba04f83b'
 
 /** Sui 鏈上 Random 共享對象（固定地址） */
 export const RANDOM_OBJECT_ID = '0x8'
@@ -31,11 +31,11 @@ export const CLOCK_OBJECT_ID = '0x6'
 
 /** USDC Coin Type（含 package prefix） */
 export const USDC_COIN_TYPE =
-  '0x8aff1b991af9558e586941593cfa17a93181cdd0ef2363e3768f73e5729e7870::usdc::USDC'
+  '0xe3a2548fe26476e33ebff61983e821b6f5752843633ad0dcac2658811a0b4c20::usdc::USDC'
 
 /** TSUI Coin Type（含 package prefix） */
 export const TSUI_COIN_TYPE =
-  '0x8aff1b991af9558e586941593cfa17a93181cdd0ef2363e3768f73e5729e7870::tsui::TSUI'
+  '0xe3a2548fe26476e33ebff61983e821b6f5752843633ad0dcac2658811a0b4c20::tsui::TSUI'
 
 /** Gas 錢包地址（代替玩家支付 gas） */
 export const GAS_WALLET_ADDRESS =

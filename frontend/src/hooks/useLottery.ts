@@ -2,7 +2,10 @@
  * useLottery
  *
  * 查詢 LotterySystem 狀態、玩家彩票 NFT，提供觸發抽獎和領獎功能。
- * 每 10 秒自動刷新一次；交易後以 1.2s / 2.8s / 5s 連續輪詢確保 RPC 同步。
+ * 每 10 秒自動刷新；交易後 waitForTransaction 確保 RPC 同步再 refetch。
+ *
+ * 獎金採物理分離設計（prizes Table），中獎者隨時可領，不受後續開獎影響。
+ * 掃描玩家所有彩票對照 prizes table，找出所有歷史中獎票。
  */
 
 import { useState, useEffect, useCallback } from 'react'
@@ -17,17 +20,19 @@ import {
 } from '../lib/constants'
 import { UseSessionKeyResult } from './useSessionKey'
 
-
 export interface UseLotteryResult {
   lotteryInfo: LotteryInfo | null
   lotteryLoading: boolean
   myTickets: LotteryTicket[]
   ticketsLoading: boolean
-  winningTicket: LotteryTicket | null   // 玩家持有的中獎彩票（前一輪）
+  /** 玩家持有的所有中獎彩票（可能跨多輪） */
+  winningTickets: LotteryTicket[]
+  /** 相容舊介面：取第一張中獎票 */
+  winningTicket: LotteryTicket | null
   triggerLottery: () => Promise<void>
   claimPrize: (ticketId: string, playerBalanceId: string, playerBalanceUSDCId: string | null) => Promise<void>
   discardTicket: (ticketId: string) => Promise<void>
-  discardAllOld: (ticketIds: string[]) => Promise<void>  // 一鍵回收所有舊彩票
+  discardAllOld: (ticketIds: string[]) => Promise<void>
   refetch: () => void
   isBusy: boolean
   lotteryError: string | null
@@ -41,6 +46,7 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
   const [lotteryLoading, setLotteryLoading] = useState(false)
   const [myTickets, setMyTickets] = useState<LotteryTicket[]>([])
   const [ticketsLoading, setTicketsLoading] = useState(false)
+  const [winningTickets, setWinningTickets] = useState<LotteryTicket[]>([])
   const [isBusy, setIsBusy] = useState(false)
   const [lotteryError, setLotteryError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -58,6 +64,11 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
         const content = res.data?.content
         if (!content || !('fields' in content)) return
         const f = content.fields as Record<string, any>
+
+        // 取出 prizes table 的物件 ID
+        const prizesTableId: string | null =
+          f.prizes?.fields?.id?.id ?? null
+
         setLotteryInfo({
           round: Number(f.round),
           ticketCount: Number(f.ticket_count),
@@ -76,6 +87,7 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
               ? (f.prize_pool_usdc?.value ?? 0)
               : (f.prize_pool_usdc ?? 0)
           ),
+          prizesTableId,
         })
       })
       .catch(() => {})
@@ -117,21 +129,51 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
     return () => { cancelled = true }
   }, [suiClient, sessionAddress, tick])
 
+  // ── 掃描 prizes table，找出所有歷史中獎票 ──
+  useEffect(() => {
+    if (!lotteryInfo?.prizesTableId || myTickets.length === 0) {
+      setWinningTickets([])
+      return
+    }
+    const tableId = lotteryInfo.prizesTableId
+    let cancelled = false
+
+    const checkAll = async () => {
+      const winners: LotteryTicket[] = []
+      await Promise.all(
+        myTickets.map(async (ticket) => {
+          try {
+            const prizeObj = await suiClient.getDynamicFieldObject({
+              parentId: tableId,
+              name: { type: 'u64', value: String(ticket.round) },
+            })
+            const content = prizeObj.data?.content
+            if (!content || !('fields' in content)) return
+            // Table entry 的結構：fields.value.fields.winner_ticket
+            const f = content.fields as Record<string, any>
+            const prizeFields = f.value?.fields ?? f
+            if (Number(prizeFields.winner_ticket) === ticket.ticketNumber) {
+              winners.push(ticket)
+            }
+          } catch {
+            // 該輪沒有 prize entry（未開獎或已領取）
+          }
+        })
+      )
+      if (!cancelled) setWinningTickets(winners)
+    }
+
+    checkAll()
+    return () => { cancelled = true }
+  }, [lotteryInfo?.prizesTableId, myTickets, suiClient])
+
   // 每 10 秒自動刷新
   useEffect(() => {
     const id = setInterval(refetch, 10_000)
     return () => clearInterval(id)
   }, [refetch])
 
-  // 找出中獎彩票：上一輪（round - 1）且 ticket_number == winner_ticket
-  const winningTicket = lotteryInfo
-    ? (myTickets.find(
-        (t) =>
-          t.round === lotteryInfo.round - 1 &&
-          t.ticketNumber === lotteryInfo.winnerTicket &&
-          (lotteryInfo.pendingPrizeSui > 0n || lotteryInfo.pendingPrizeUsdc > 0n)
-      ) ?? null)
-    : null
+  const winningTicket = winningTickets[0] ?? null
 
   // ── 觸發抽獎 ──
   const triggerLottery = async () => {
@@ -143,7 +185,7 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
         target: `${PACKAGE_ID}::lottery::trigger_lottery`,
         arguments: [
           tx.object(LOTTERY_SYSTEM_ID),
-          tx.object(RANDOM_OBJECT_ID),   // 合約順序：random 在 clock 之前
+          tx.object(RANDOM_OBJECT_ID),
           tx.object(CLOCK_OBJECT_ID),
         ],
       })
@@ -156,8 +198,6 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
       const code = codeMatch ? parseInt(codeMatch[1]) : -1
       if (code === 200) {
         setLotteryError('開獎時間尚未到，請等倒數結束後再試')
-      } else if (code === 201 || code === 202 || code === 203 || code === 204) {
-        setLotteryError('本輪無待領獎金或彩票驗證失敗')
       } else {
         setLotteryError('操作失敗：' + msg.slice(0, 80))
       }
@@ -176,24 +216,20 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
     setLotteryError(null)
     try {
       const tx = new Transaction()
-      // 1. claim_prize 回傳 (Coin<SUI>, Coin<USDC>)
       const [suiCoin, usdcCoin] = tx.moveCall({
         target: `${PACKAGE_ID}::lottery::claim_prize`,
         arguments: [tx.object(LOTTERY_SYSTEM_ID), tx.object(ticketId)],
       })
-      // 2. 存入 SUI PlayerBalance
       tx.moveCall({
         target: `${PACKAGE_ID}::mines::deposit_prize_sui`,
         arguments: [tx.object(playerBalanceId), suiCoin],
       })
-      // 3. 存入 USDC PlayerBalance（有才存）
       if (playerBalanceUSDCId) {
         tx.moveCall({
           target: `${PACKAGE_ID}::mines::deposit_prize_usdc`,
           arguments: [tx.object(playerBalanceUSDCId), usdcCoin],
         })
       } else {
-        // 無 USDC 帳戶時轉給自己（避免零幣懸空）
         tx.transferObjects([usdcCoin], tx.pure.address(sessionAddress!))
       }
       const { digest } = await executeWithSession(tx)
@@ -203,7 +239,7 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
       const msg: string = e?.message ?? String(e)
       const codeMatch = msg.match(/abort code: (\d+)/) || msg.match(/MoveAbort\(.*?,\s*(\d+)\)/)
       const code = codeMatch ? parseInt(codeMatch[1]) : -1
-      if (code === 201) setLotteryError('彩票輪次不符，請確認是否為上一輪彩票')
+      if (code === 201) setLotteryError('彩票輪次不符')
       else if (code === 202) setLotteryError('彩票號碼不符，您未中獎')
       else if (code === 203) setLotteryError('彩票發放時間異常')
       else if (code === 204) setLotteryError('本輪無待領獎金')
@@ -268,6 +304,7 @@ export function useLottery(session: UseSessionKeyResult): UseLotteryResult {
     lotteryLoading,
     myTickets,
     ticketsLoading,
+    winningTickets,
     winningTicket,
     triggerLottery,
     claimPrize,
