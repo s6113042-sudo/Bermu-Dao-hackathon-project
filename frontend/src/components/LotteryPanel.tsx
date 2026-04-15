@@ -1,6 +1,7 @@
 import { useState, useEffect, type ReactNode } from 'react'
 import { UseLotteryResult } from '../hooks/useLottery'
 import { MIST_PER_SUI, RAW_PER_USDC } from '../lib/constants'
+import { LotteryTicket } from '../types/game'
 
 interface LotteryPanelProps {
   lottery: UseLotteryResult
@@ -10,14 +11,14 @@ interface LotteryPanelProps {
   playerBalanceUSDCId?: string | null
 }
 
-export default function LotteryPanel({ lottery, isWalletConnected, onClose }: LotteryPanelProps) {
-  const { lotteryInfo, lotteryLoading, myTickets, winningTicket, triggerLottery, discardAllOld, isBusy, lotteryError } = lottery
+export default function LotteryPanel({ lottery, isWalletConnected, onClose, playerBalanceId, playerBalanceUSDCId }: LotteryPanelProps) {
+  const { lotteryInfo, lotteryLoading, myTickets, winningTickets, triggerLottery, discardAllOld, claimAllPrizes, isBusy, lotteryError } = lottery
   const [showRules, setShowRules] = useState(false)
   const [remaining, setRemaining] = useState(0)
 
   const currentRound = lotteryInfo?.round ?? 0
 
-  // 倒數計時（提升至此層，供按鈕邏輯使用）
+  // 倒數計時
   useEffect(() => {
     if (!lotteryInfo?.nextDrawMs) return
     const update = () => setRemaining(Math.max(0, lotteryInfo.nextDrawMs - Date.now()))
@@ -32,9 +33,10 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
   // 分組：本輪 vs 舊彩票
   const currentTickets = myTickets.filter(t => t.round === currentRound)
   const oldTickets     = myTickets.filter(t => t.round < currentRound)
-  // 舊彩票中可回收的（排除中獎彩票）
+  const winningIds     = new Set(winningTickets.map(t => t.objectId))
+  // 舊彩票中可回收的（排除所有中獎彩票）
   const recyclableIds  = oldTickets
-    .filter(t => t.objectId !== winningTicket?.objectId)
+    .filter(t => !winningIds.has(t.objectId))
     .map(t => t.objectId)
 
   return (
@@ -119,14 +121,14 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
         )}
 
         {/* ── 上輪未中獎提示 ── */}
-        {oldTickets.length > 0 && !winningTicket && (
+        {oldTickets.length > 0 && winningTickets.length === 0 && (
           <div
             className="flex items-center justify-between px-3 py-2.5 rounded-xl text-xs"
             style={{ background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)' }}
           >
             <div className="flex items-center gap-2 text-gray-400">
               <span>😔</span>
-              <span>上輪 <span className="text-gray-300 font-medium">{oldTickets.length}</span> 張彩票未中獎</span>
+              <span>舊彩票 <span className="text-gray-300 font-medium">{oldTickets.length}</span> 張未中獎</span>
             </div>
             {recyclableIds.length > 0 && (
               <button
@@ -141,22 +143,25 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
           </div>
         )}
 
-        {/* ── 中獎橫幅 ── */}
-        {winningTicket && (
-          <div
-            className="rounded-xl p-4 flex items-center gap-3"
-            style={{
-              background: 'linear-gradient(135deg, rgba(250,204,21,0.12), rgba(217,119,6,0.08))',
-              border: '1px solid rgba(250,204,21,0.35)',
+        {/* ── 中獎區塊 ── */}
+        {winningTickets.length === 1 && (
+          <WinningBanner
+            ticket={winningTickets[0]}
+            lottery={lottery}
+            isBusy={isBusy}
+            playerBalanceId={playerBalanceId}
+            playerBalanceUSDCId={playerBalanceUSDCId}
+          />
+        )}
+        {winningTickets.length > 1 && (
+          <WinningBannerMulti
+            tickets={winningTickets}
+            onClaimAll={() => {
+              if (playerBalanceId) claimAllPrizes(winningTickets.map(t => t.objectId), playerBalanceId, playerBalanceUSDCId ?? null)
             }}
-          >
-            <span className="text-2xl">🏆</span>
-            <div>
-              <p className="text-yellow-300 font-bold text-sm">恭喜中獎！</p>
-              <p className="text-yellow-500 text-xs">獎金正在自動存入您的遊戲餘額…</p>
-            </div>
-            {isBusy && <Spinner />}
-          </div>
+            isBusy={isBusy}
+            hasBalance={!!playerBalanceId}
+          />
         )}
 
         {/* 底部間距 */}
@@ -244,7 +249,7 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
                 每局遊戲結束，平台從莊家利潤中抽取 5% 注入獎池。SUI 遊戲進 SUI 獎池，USDC 遊戲進 USDC 獎池。
               </RuleItem>
               <RuleItem icon="🗑️" title="舊彩票處理">
-                開獎後非中獎彩票自動失效，可點擊彩票列表中的 ✕ 手動刪除並回收儲存押金。
+                開獎後非中獎彩票自動失效，可點擊「回收押金」手動刪除並回收儲存押金。
               </RuleItem>
             </div>
 
@@ -294,6 +299,93 @@ function RuleItem({ icon, title, children }: { icon: string; title: string; chil
         <p className="text-purple-300 font-semibold text-xs mb-0.5">{title}</p>
         <p className="text-gray-400 text-xs leading-relaxed">{children}</p>
       </div>
+    </div>
+  )
+}
+
+// ── 中獎橫幅（單張中獎票） ──
+function WinningBanner({ ticket, lottery, isBusy, playerBalanceId, playerBalanceUSDCId }: {
+  ticket: LotteryTicket
+  lottery: UseLotteryResult
+  isBusy: boolean
+  playerBalanceId?: string | null
+  playerBalanceUSDCId?: string | null
+}) {
+  const [claiming, setClaiming] = useState(false)
+
+  const handleClaim = async () => {
+    if (!playerBalanceId) return
+    setClaiming(true)
+    try {
+      await lottery.claimPrize(ticket.objectId, playerBalanceId, playerBalanceUSDCId ?? null)
+    } finally {
+      setClaiming(false)
+    }
+  }
+
+  return (
+    <div
+      className="rounded-xl p-4 flex items-center justify-between gap-3"
+      style={{
+        background: 'linear-gradient(135deg, rgba(250,204,21,0.12), rgba(217,119,6,0.08))',
+        border: '1px solid rgba(250,204,21,0.35)',
+      }}
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-2xl">🏆</span>
+        <div>
+          <p className="text-yellow-300 font-bold text-sm">第 {ticket.round} 輪中獎！</p>
+          <p className="text-yellow-600 text-xs">票號 #{ticket.ticketNumber}・點擊領取獎金</p>
+        </div>
+      </div>
+      {(isBusy || claiming) ? (
+        <Spinner />
+      ) : (
+        <button
+          onClick={handleClaim}
+          disabled={!playerBalanceId}
+          className="text-xs px-3 py-1.5 rounded-lg font-semibold transition-opacity hover:opacity-80 disabled:opacity-40"
+          style={{ background: 'rgba(250,204,21,0.2)', color: '#fde68a', border: '1px solid rgba(250,204,21,0.4)' }}
+        >
+          領獎
+        </button>
+      )}
+    </div>
+  )
+}
+
+// ── 多輪中獎整合卡片 ──
+function WinningBannerMulti({ tickets, onClaimAll, isBusy, hasBalance }: {
+  tickets: LotteryTicket[]
+  onClaimAll: () => void
+  isBusy: boolean
+  hasBalance: boolean
+}) {
+  return (
+    <div
+      className="rounded-xl p-4 flex flex-col gap-3"
+      style={{
+        background: 'linear-gradient(135deg, rgba(250,204,21,0.12), rgba(217,119,6,0.08))',
+        border: '1px solid rgba(250,204,21,0.35)',
+      }}
+    >
+      <div className="flex items-center gap-3">
+        <span className="text-2xl">🏆</span>
+        <div>
+          <p className="text-yellow-300 font-bold text-sm">恭喜！共 {tickets.length} 輪中獎</p>
+          <p className="text-yellow-600 text-xs">
+            {tickets.map(t => `第 ${t.round} 輪 #${t.ticketNumber}`).join('、')}
+          </p>
+        </div>
+      </div>
+      <button
+        onClick={onClaimAll}
+        disabled={isBusy || !hasBalance}
+        className="w-full py-2 rounded-lg text-sm font-semibold transition-opacity hover:opacity-80 disabled:opacity-40"
+        style={{ background: 'rgba(250,204,21,0.2)', color: '#fde68a', border: '1px solid rgba(250,204,21,0.4)' }}
+      >
+        {isBusy ? <Spinner /> : `一鍵領取全部 ${tickets.length} 輪獎金`}
+      </button>
     </div>
   )
 }

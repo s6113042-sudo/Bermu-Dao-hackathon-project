@@ -74,6 +74,8 @@ export interface LotteryInfo {
   pendingPrizeUsdc: bigint
   prizePoolSui: bigint
   prizePoolUsdc: bigint
+  /** prizes table 的物件 ID（用於查詢各輪待領獎金） */
+  prizesTableId: string | null
 }
 
 /** LotteryTicket NFT */
