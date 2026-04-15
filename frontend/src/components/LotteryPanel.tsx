@@ -1,7 +1,6 @@
 import { useState, useEffect, type ReactNode } from 'react'
 import { UseLotteryResult } from '../hooks/useLottery'
 import { MIST_PER_SUI, RAW_PER_USDC } from '../lib/constants'
-import { LotteryTicket } from '../types/game'
 
 interface LotteryPanelProps {
   lottery: UseLotteryResult
@@ -12,8 +11,7 @@ interface LotteryPanelProps {
 }
 
 export default function LotteryPanel({ lottery, isWalletConnected, onClose }: LotteryPanelProps) {
-  const { lotteryInfo, lotteryLoading, myTickets, winningTicket, triggerLottery, discardTicket, discardAllOld, isBusy, lotteryError } = lottery
-  const [showTickets, setShowTickets] = useState(false)
+  const { lotteryInfo, lotteryLoading, myTickets, winningTicket, triggerLottery, discardAllOld, isBusy, lotteryError } = lottery
   const [showRules, setShowRules] = useState(false)
   const [remaining, setRemaining] = useState(0)
 
@@ -89,7 +87,11 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
         </div>
       </div>
 
-      <div className="p-5 flex flex-col gap-4">
+      {/* ── 可滾動內容區 ── */}
+      <div
+        className="overflow-y-auto px-5 pt-5 flex flex-col gap-4"
+        style={{ maxHeight: '52vh', scrollbarWidth: 'thin', scrollbarColor: 'rgba(139,92,246,0.3) transparent' }}
+      >
         {/* ── 獎池卡片 ── */}
         <div className="grid grid-cols-2 gap-3">
           <PrizeBox label="SUI 獎池" value={prizePoolSui}  symbol="SUI"  color="#6fbcf0" loading={lotteryLoading} icon="💧" />
@@ -108,81 +110,33 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
               <span className="text-white font-bold">{lotteryInfo.ticketCount}</span>
               <span>張彩票參與抽獎</span>
             </div>
-            {myTickets.length > 0 && (
-              <button
-                onClick={() => setShowTickets(!showTickets)}
-                className="flex items-center gap-1 text-purple-400 hover:text-purple-300 transition-colors font-medium"
-              >
-                我的 {myTickets.length} 張
-                <span style={{ fontSize: 10 }}>{showTickets ? '▲' : '▼'}</span>
-              </button>
+            {currentTickets.length > 0 && (
+              <span className="font-medium" style={{ color: '#c4b5fd' }}>
+                我有 {currentTickets.length} 張
+              </span>
             )}
           </div>
         )}
 
-        {/* ── 我的彩票（分本輪／舊票） ── */}
-        {showTickets && myTickets.length > 0 && (
-          <div className="flex flex-col gap-3">
-
-            {/* 本輪彩票 */}
-            {currentTickets.length > 0 && (
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center gap-2 px-1">
-                  <span className="text-purple-400 text-xs font-semibold">本輪彩票</span>
-                  <span className="text-gray-600 text-xs">· 開獎前不可回收</span>
-                </div>
-                {currentTickets.map(ticket => (
-                  <TicketRow
-                    key={ticket.objectId}
-                    ticket={ticket}
-                    isWinner={false}
-                    canDiscard={false}
-                    onDiscard={() => {}}
-                    isBusy={isBusy}
-                  />
-                ))}
-              </div>
-            )}
-
-            {/* 舊彩票 */}
-            {oldTickets.length > 0 && (
-              <div className="flex flex-col gap-1.5">
-                <div className="flex items-center justify-between px-1">
-                  <div className="flex items-center gap-2">
-                    <span className="text-gray-400 text-xs font-semibold">上輪彩票</span>
-                    {recyclableIds.length > 0 && (
-                      <span className="text-gray-600 text-xs">· 未中獎可回收儲存押金</span>
-                    )}
-                  </div>
-                  {recyclableIds.length > 1 && (
-                    <button
-                      onClick={() => discardAllOld(recyclableIds)}
-                      disabled={isBusy}
-                      className="text-xs px-2 py-0.5 rounded-lg font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
-                      style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}
-                    >
-                      一鍵回收全部
-                    </button>
-                  )}
-                </div>
-                <div className="flex flex-col gap-1.5 max-h-32 overflow-y-auto pr-1"
-                  style={{ scrollbarWidth: 'thin', scrollbarColor: 'rgba(139,92,246,0.3) transparent' }}
-                >
-                  {oldTickets.map(ticket => {
-                    const isWin = winningTicket?.objectId === ticket.objectId
-                    return (
-                      <TicketRow
-                        key={ticket.objectId}
-                        ticket={ticket}
-                        isWinner={isWin}
-                        canDiscard={!isWin}
-                        onDiscard={() => discardTicket(ticket.objectId)}
-                        isBusy={isBusy}
-                      />
-                    )
-                  })}
-                </div>
-              </div>
+        {/* ── 上輪未中獎提示 ── */}
+        {oldTickets.length > 0 && !winningTicket && (
+          <div
+            className="flex items-center justify-between px-3 py-2.5 rounded-xl text-xs"
+            style={{ background: 'rgba(107,114,128,0.08)', border: '1px solid rgba(107,114,128,0.2)' }}
+          >
+            <div className="flex items-center gap-2 text-gray-400">
+              <span>😔</span>
+              <span>上輪 <span className="text-gray-300 font-medium">{oldTickets.length}</span> 張彩票未中獎</span>
+            </div>
+            {recyclableIds.length > 0 && (
+              <button
+                onClick={() => discardAllOld(recyclableIds)}
+                disabled={isBusy}
+                className="text-xs px-2.5 py-1 rounded-lg font-medium transition-opacity hover:opacity-80 disabled:opacity-40"
+                style={{ background: 'rgba(239,68,68,0.12)', color: '#f87171', border: '1px solid rgba(239,68,68,0.25)' }}
+              >
+                {isBusy ? <Spinner /> : '回收押金'}
+              </button>
             )}
           </div>
         )}
@@ -205,7 +159,15 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
           </div>
         )}
 
-        {/* ── 觸發開獎 ── */}
+        {/* 底部間距 */}
+        <div className="h-1" />
+      </div>
+
+      {/* ── 固定底部：觸發開獎 + 錯誤訊息 ── */}
+      <div
+        className="px-5 pb-5 pt-3 flex flex-col gap-2"
+        style={{ borderTop: '1px solid rgba(255,255,255,0.05)' }}
+      >
         {isWalletConnected && (
           <div className="flex flex-col gap-1.5">
             <button
@@ -233,7 +195,6 @@ export default function LotteryPanel({ lottery, isWalletConnected, onClose }: Lo
           </div>
         )}
 
-        {/* ── 錯誤訊息 ── */}
         {lotteryError && (
           <div
             className="flex items-center gap-2 px-3 py-2 rounded-xl text-xs"
@@ -323,39 +284,6 @@ function PrizeBox({ label, value, symbol, color, loading, icon }: {
   )
 }
 
-// ── 彩票列 ──
-function TicketRow({ ticket, isWinner, canDiscard, onDiscard, isBusy }: {
-  ticket: LotteryTicket; isWinner: boolean; canDiscard: boolean; onDiscard: () => void; isBusy: boolean
-}) {
-  return (
-    <div
-      className="flex items-center justify-between px-3 py-2 rounded-lg text-xs"
-      style={{
-        background: isWinner ? 'rgba(250,204,21,0.08)' : 'rgba(255,255,255,0.03)',
-        border: `1px solid ${isWinner ? 'rgba(250,204,21,0.3)' : 'rgba(255,255,255,0.06)'}`,
-      }}
-    >
-      <div className="flex items-center gap-2">
-        <span style={{ color: isWinner ? '#fde047' : '#a78bfa' }}>🎟️</span>
-        <span className="text-gray-300">票號 #{ticket.ticketNumber}</span>
-        {isWinner && <span className="text-yellow-400 font-bold">中獎 🏆</span>}
-      </div>
-      <div className="flex items-center gap-2">
-        <span className="text-gray-600">R{ticket.round}</span>
-        {canDiscard && (
-          <button
-            onClick={onDiscard}
-            disabled={isBusy}
-            className="text-gray-600 hover:text-red-400 transition-colors w-5 h-5 flex items-center justify-center rounded hover:bg-red-400/10"
-            title="回收此彩票（取回儲存押金）"
-          >
-            ✕
-          </button>
-        )}
-      </div>
-    </div>
-  )
-}
 
 // ── 規則條目 ──
 function RuleItem({ icon, title, children }: { icon: string; title: string; children: ReactNode }) {

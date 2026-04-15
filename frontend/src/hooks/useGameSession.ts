@@ -5,7 +5,7 @@
  * reveal_tile 和 cashout 現在需要傳入 LotterySystem 和 Clock。
  */
 
-import { useState } from 'react'
+import { useState, useRef } from 'react'
 import { Transaction } from '@mysten/sui/transactions'
 import { GameState, TileState, GameHistory, Currency } from '../types/game'
 import {
@@ -76,6 +76,8 @@ export interface UseGameSessionResult {
 export function useGameSession(session: UseSessionKeyResult): UseGameSessionResult {
   const { sessionAddress, executeWithSession } = session
   const [gameState, setGameState] = useState<GameState>(initialState)
+  // 追蹤 session 物件的最新版本，避免 RPC 查詢舊版本造成衝突
+  const sessionObjRef = useRef<{ objectId: string; version: string; digest: string } | null>(null)
   const [isProcessing, setIsProcessing] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [gameHistory, setGameHistory] = useState<GameHistory[]>(() => loadHistory())
@@ -115,6 +117,8 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
           obj.owner.AddressOwner === sessionAddress
       )
       const sessionId: string | null = sessionObj?.reference?.objectId ?? null
+      // 記錄初始物件版本
+      sessionObjRef.current = sessionObj?.reference ?? null
 
       const now = Date.now()
       setGameStartTime(now)
@@ -144,11 +148,16 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
       const isSUI = gameState.currency === 'SUI'
       const revealFn = isSUI ? 'reveal_tile' : 'reveal_tile_usdc'
 
+      // 用精確版本傳入 session 物件，跳過 RPC 查詢並避免版本衝突
+      const sessionArg = sessionObjRef.current
+        ? tx.objectRef(sessionObjRef.current)
+        : tx.object(gameState.sessionId!)
+
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::${revealFn}`,
         arguments: [
           tx.object(GAME_PLATFORM_ID),
-          tx.object(gameState.sessionId),
+          sessionArg,
           tx.pure.u64(index),
           tx.object(RANDOM_OBJECT_ID),
           tx.object(LOTTERY_SYSTEM_ID),
@@ -156,7 +165,12 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
         ],
       })
 
-      const { digest, events } = await executeWithSession(tx)
+      const { digest, events, effects } = await executeWithSession(tx)
+
+      // 從 effects 取得最新物件版本，供下一次翻格使用
+      const mutated: any[] = effects?.mutated ?? []
+      const updatedRef = mutated.find((o: any) => o.reference?.objectId === gameState.sessionId)
+      if (updatedRef?.reference) sessionObjRef.current = updatedRef.reference
 
       const tileEvent = events.find((e: any) => e.type?.includes('TileRevealed'))
       if (!tileEvent) throw new Error('未收到 TileRevealed 事件')
@@ -214,17 +228,22 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
       const isSUI = gameState.currency === 'SUI'
       const cashoutFn = isSUI ? 'cashout' : 'cashout_usdc'
 
+      const sessionArg = sessionObjRef.current
+        ? tx.objectRef(sessionObjRef.current)
+        : tx.object(gameState.sessionId!)
+
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::${cashoutFn}`,
         arguments: [
           tx.object(GAME_PLATFORM_ID),
-          tx.object(gameState.sessionId),
+          sessionArg,
           tx.object(playerBalanceId),
           tx.object(LOTTERY_SYSTEM_ID),
           tx.object(CLOCK_OBJECT_ID),
         ],
       })
       await executeWithSession(tx)
+      sessionObjRef.current = null
 
       setGameState((prev) => {
         const entry: GameHistory = {
@@ -256,15 +275,20 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
       const isSUI = gameState.currency === 'SUI'
       const cancelFn = isSUI ? 'cancel_game' : 'cancel_game_usdc'
 
+      const sessionArg = sessionObjRef.current
+        ? tx.objectRef(sessionObjRef.current)
+        : tx.object(gameState.sessionId!)
+
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::${cancelFn}`,
         arguments: [
           tx.object(GAME_PLATFORM_ID),
-          tx.object(gameState.sessionId),
+          sessionArg,
           tx.object(playerBalanceId),
         ],
       })
       await executeWithSession(tx)
+      sessionObjRef.current = null
 
       setGameState((prev) => {
         const entry: GameHistory = {
@@ -299,11 +323,16 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
       const isSUI = gameState.currency === 'SUI'
       const destroyFn = isSUI ? 'destroy_exploded_game' : 'destroy_exploded_game_usdc'
 
+      const sessionArg = sessionObjRef.current
+        ? tx.objectRef(sessionObjRef.current)
+        : tx.object(gameState.sessionId!)
+
       tx.moveCall({
         target: `${PACKAGE_ID}::${MODULE_NAME}::${destroyFn}`,
-        arguments: [tx.object(gameState.sessionId)],
+        arguments: [sessionArg],
       })
       await executeWithSession(tx)
+      sessionObjRef.current = null
     } catch (e: any) {
       setError(parseError(e))
     } finally {
@@ -315,6 +344,7 @@ export function useGameSession(session: UseSessionKeyResult): UseGameSessionResu
   const resetGame = () => {
     setGameState(initialState)
     setError(null)
+    sessionObjRef.current = null
   }
 
   return {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { GamePhase, TileState } from '../types/game'
 
 interface GameBoardProps {
@@ -11,14 +11,20 @@ interface GameBoardProps {
 export default function GameBoard({ tiles, phase, onReveal, isProcessing }: GameBoardProps) {
   const canReveal = phase === 'playing' && !isProcessing
   const [revealingIndex, setRevealingIndex] = useState<number | null>(null)
+  // 即時鎖：不依賴 React re-render，防止連點穿透
+  const clickLocked = useRef(false)
 
-  // 處理結束後清除 revealingIndex
+  // 處理結束後清除 revealingIndex 並解鎖
   useEffect(() => {
-    if (!isProcessing) setRevealingIndex(null)
+    if (!isProcessing) {
+      setRevealingIndex(null)
+      clickLocked.current = false
+    }
   }, [isProcessing])
 
   const handleClick = async (index: number) => {
-    if (!canReveal || tiles[index] !== 'hidden') return
+    if (!canReveal || tiles[index] !== 'hidden' || clickLocked.current) return
+    clickLocked.current = true
     setRevealingIndex(index)
     await onReveal(index)
   }
